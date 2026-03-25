@@ -7,6 +7,8 @@ from datetime import date, datetime
 import os
 import time
 import requests # Necesario para ImgBB
+import io 
+from fpdf import FPDF # NUEVO: Librería para generar PDFs profesionales
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Sistema Ganadero Élite", page_icon="🐮", layout="wide")
@@ -95,12 +97,16 @@ st.markdown("""
         box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
     }
     
-    /* Botones Rojos */
-    .btn-rojo {
-        background-color: #d93025 !important;
+    /* Botones Principales (Rojos y Ovalados para móviles) */
+    div.stButton > button[kind="primary"] {
+        background-color: #e53935 !important;
         color: white !important;
-        font-weight: bold;
-        border: none;
+        border-radius: 25px !important;
+        font-weight: bold !important;
+        border: none !important;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #c62828 !important;
     }
 
     /* Header Estilo App para Registro Completo */
@@ -222,20 +228,65 @@ st.markdown("""
         justify-content: center;
         gap: 20px;
     }
+    
+    /* Botones Cuadrados Sanidad */
+    .btn-cuadrado {
+        height: 120px !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px !important;
+        font-weight: bold;
+    }
+
+    /* --- ESTILOS DASHBOARD --- */
+    .dash-card { background-color: white; border-radius: 10px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; }
+    .grid-2-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .metric-card { background-color: white; border-radius: 10px; padding: 15px; display: flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; }
+    .metric-icon { font-size: 35px; margin-right: 15px; }
+    .metric-info { flex-grow: 1; text-align: right; }
+    .metric-title { font-size: 12px; color: #777; margin-bottom: 5px; text-transform: uppercase; }
+    .metric-value { font-size: 22px; font-weight: bold; margin: 0; color: #333; }
+    
+    /* --- NUEVOS ESTILOS PARA ALERTAS --- */
+    .alerta-card {
+        background-color: white;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        border-left: 5px solid #9e9e9e;
+        display: flex;
+        align-items: center;
+    }
+    .alerta-icon {
+        font-size: 30px;
+        margin-right: 15px;
+    }
+    .alerta-content {
+        flex-grow: 1;
+    }
+    .alerta-title {
+        font-weight: bold;
+        font-size: 16px;
+        margin-bottom: 4px;
+        color: #333;
+    }
+    .alerta-desc {
+        color: #666;
+        font-size: 14px;
+        margin: 0;
+    }
+    .alerta-animal {
+        font-weight: bold;
+        color: #1565c0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXIÓN GOOGLE SHEETS ---
-def obtener_credenciales():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    if os.path.exists("credentials.json"):
-        return Credentials.from_service_account_file("credentials.json", scopes=scopes)
-    elif "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        return Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    else:
-        return None
-
+# --- CONEXIÓN GOOGLE SHEETS (CON CACHÉ DE RECURSOS) ---
+@st.cache_resource
 def conectar_sheets():
     creds = obtener_credenciales()
     if not creds:
@@ -249,6 +300,40 @@ def conectar_sheets():
     except Exception as e:
         st.error(f"⚠️ Error conectando con Google Sheets: {e}")
         return None
+
+def obtener_credenciales():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    if os.path.exists("credentials.json"):
+        return Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    elif "gcp_service_account" in st.secrets:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        return Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    else:
+        return None
+
+# --- CARGA DE DATOS (CON CACHÉ DE DATOS ULTRARRÁPIDO) ---
+@st.cache_data(ttl=600) # El caché dura 10 minutos automáticamente o hasta que lo limpiemos
+def cargar_datos():
+    sh = conectar_sheets()
+    if not sh:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    try:
+        hoja_animales = sh.get_worksheet(0)
+        df = pd.DataFrame(hoja_animales.get_all_records())
+        if not df.empty:
+            df.columns = df.columns.astype(str).str.strip()
+            df["ID"] = df["ID"].astype(str)
+    except:
+        df = pd.DataFrame()
+
+    try:
+        hoja_historial = sh.worksheet("Historial")
+        df_hist = pd.DataFrame(hoja_historial.get_all_records())
+    except:
+        df_hist = pd.DataFrame()
+        
+    return df, df_hist
 
 # --- FUNCIÓN: SUBIR A IMGBB ---
 def subir_foto_imgbb(archivo):
@@ -281,11 +366,10 @@ def calcular_edad(fecha_nac_str):
     except:
         return "--"
 
-# --- CRUD BASE DE DATOS ---
+# --- CRUD BASE DE DATOS (AHORA LIMPIANDO CACHÉ AL GUARDAR) ---
 def guardar_animal(sheet, datos, rerun=True):
-    # 'datos' ahora puede ser una lista más larga que las columnas actuales
-    # Google Sheets simplemente añadirá las celdas en las columnas nuevas
     sheet.append_row(datos)
+    cargar_datos.clear() # Limpia la RAM para que se refleje el nuevo dato de inmediato
     st.toast("✅ Animal registrado")
     if rerun:
         st.balloons()
@@ -300,6 +384,7 @@ def guardar_evento(sh, datos, tipo_evento):
         worksheet.append_row(["Fecha", "Tipo Evento", "ID Animal", "Detalle 1", "Detalle 2", "Notas"])
     
     worksheet.append_row(datos)
+    cargar_datos.clear() # Limpia la RAM
     st.toast(f"✅ {tipo_evento} guardado")
 
 def encontrar_fila_por_id(sheet, id_animal):
@@ -314,6 +399,7 @@ def actualizar_animal_completo(sheet, id_animal, nuevos_datos):
     if fila:
         rango = f"A{fila}:J{fila}"
         sheet.update(rango, [nuevos_datos])
+        cargar_datos.clear() # Limpia la RAM
         st.success("✅ Datos actualizados correctamente")
         time.sleep(1)
         st.rerun()
@@ -322,11 +408,13 @@ def cambiar_estado_animal(sheet, id_animal, nuevo_estado):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.update_cell(fila, 9, nuevo_estado)
+        cargar_datos.clear() # Limpia la RAM
 
 def eliminar_animal_db(sheet, id_animal):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.delete_rows(fila)
+        cargar_datos.clear() # Limpia la RAM
         st.warning("🗑️ Animal eliminado")
         time.sleep(1)
         st.rerun()
@@ -335,6 +423,7 @@ def cambiar_estado_vendido(sheet, id_animal):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.update_cell(fila, 9, "VENDIDO") 
+        cargar_datos.clear() # Limpia la RAM
 
 # --- GESTIÓN DE ESTADO (NAVEGACIÓN) ---
 if 'nav_gestion' not in st.session_state:
@@ -349,9 +438,10 @@ if 'sub_accion_veterinaria' not in st.session_state:
     st.session_state.sub_accion_veterinaria = None
 if 'sub_accion_reproduccion' not in st.session_state:
     st.session_state.sub_accion_reproduccion = None
-# NUEVO: Estado para alternar entre registro rápido y completo
 if 'registro_expandido' not in st.session_state:
     st.session_state.registro_expandido = False
+if 'sub_accion_sanidad_rapida' not in st.session_state:
+    st.session_state.sub_accion_sanidad_rapida = None
 
 def ir_a_lista():
     st.session_state.nav_gestion = 'lista'
@@ -378,6 +468,7 @@ def ir_a_reproduccion():
 
 def set_accion(nombre_accion):
     st.session_state.accion_activa = nombre_accion
+    st.session_state.sub_accion_sanidad_rapida = None # Resetea la sanidad masiva al cambiar de opción
 
 def toggle_registro_mode():
     st.session_state.registro_expandido = not st.session_state.registro_expandido
@@ -386,63 +477,187 @@ def toggle_registro_mode():
 def main():
     st.title("🧬 Control Ganadero")
 
+    # Obtenemos la conexión de la caché
     sh = conectar_sheets()
     
     if sh:
-        # LEER DATOS
         hoja_animales = sh.get_worksheet(0)
-        try:
-            data = hoja_animales.get_all_records()
-            df = pd.DataFrame(data)
-            
-            if not df.empty:
-                df.columns = df.columns.astype(str).str.strip()
-                df["ID"] = df["ID"].astype(str)
-                df_activos = df[df["Estado"] != "VENDIDO"]
-                lista_ids_activos = df_activos["ID"].tolist()
-                lista_ids_todos = df["ID"].tolist()
-            else:
-                df_activos = pd.DataFrame()
-                lista_ids_activos = []
-                lista_ids_todos = []
-        except:
-            df = pd.DataFrame()
+        # Obtenemos los dataframes de la caché ultrarrápida
+        df, df_hist = cargar_datos()
+        
+        if not df.empty:
+            df_activos = df[df["Estado"] != "VENDIDO"]
+            lista_ids_activos = df_activos["ID"].tolist()
+            lista_ids_todos = df["ID"].tolist()
+        else:
             df_activos = pd.DataFrame()
             lista_ids_activos = []
-
-        # Historial
-        try:
-            hoja_historial = sh.worksheet("Historial")
-            df_hist = pd.DataFrame(hoja_historial.get_all_records())
-        except:
-            df_hist = pd.DataFrame()
+            lista_ids_todos = []
 
         # --- PESTAÑAS (TABS) ---
-        tab_dash, tab_reg, tab_gest, tab_acc, tab_ventas = st.tabs([
-            "📊 DASHBOARD", "📝 REGISTRO", "📱 GESTIÓN (APP)", "⚡ RÁPIDO", "💰 VENTAS"
+        tab_dash, tab_reg, tab_gest, tab_acc, tab_ventas, tab_alertas, tab_reportes = st.tabs([
+            "📊 DASHBOARD", "📝 REGISTRO", "📱 GESTIÓN", "⚡ RÁPIDO", "💰 VENTAS", "🔔 ALERTAS", "📑 REPORTES"
         ])
 
         # ==========================================
-        # 1. DASHBOARD
+        # 1. DASHBOARD (NUEVO DISEÑO APP MÓVIL)
         # ==========================================
         with tab_dash:
+            
+            # --- Cabecera de la Finca ---
+            st.markdown("""
+            <div style="background-color: #4CAF50; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; position: relative;">
+                <h2 style="margin: 0; font-size: 24px; color: white;">Finca ⚠️</h2>
+            </div>
+            <div style="background-color: #e0e0e0; padding: 8px 15px; font-size: 14px; border-radius: 0 0 5px 5px; margin-bottom: 15px; color: #555;">
+                <strong>Perfil:</strong> Propietario | <strong>Sincronización:</strong> ✅
+            </div>
+            """, unsafe_allow_html=True)
+
+            c_d1, c_d2 = st.columns(2)
+            with c_d1:
+                st.markdown("""
+                <div class="dash-card">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <div style="font-size: 30px;">🏠</div>
+                        <h3 style="margin:0; font-size: 20px;">Alvicion</h3>
+                    </div>
+                    <p style="color:#666; margin: 0; font-size: 14px;"><strong>Propósito:</strong> Doble propósito</p>
+                    <p style="color:#666; margin: 0; font-size: 14px;"><strong>Área de ganado:</strong> 50.0 ha</p>
+                </div>
+                """, unsafe_allow_html=True)
+            with c_d2:
+                st.markdown("""
+                <div class="dash-card">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <div style="font-size: 30px;">📊</div>
+                        <h3 style="margin:0; font-size: 20px;">Informes</h3>
+                    </div>
+                    <p style="color:#666; margin: 0; font-size: 14px;">Último informe: --</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+
             if not df_activos.empty:
-                col_graf, col_stats = st.columns([1, 1])
-                with col_graf:
-                    with st.container(border=True):
-                        st.subheader("Distribución")
-                        base = alt.Chart(df_activos).encode(theta=alt.Theta("count()", stack=True))
-                        pie = base.mark_arc(outerRadius=100, innerRadius=60).encode(
-                            color=alt.Color("Tipo"), order=alt.Order("Tipo", sort="descending"), tooltip=["Tipo", "count()"])
-                        st.altair_chart(pie, use_container_width=True)
-                with col_stats:
-                    with st.container(border=True):
-                        st.subheader("Indicadores")
-                        st.metric("Total en Finca", len(df_activos))
-                        hembras = len(df_activos[df_activos["Sexo"] == "Hembra"])
-                        st.metric("Hembras", hembras)
+                # --- CÁLCULOS DINÁMICOS ---
+                machos = len(df_activos[df_activos["Sexo"] == "Macho"])
+                hembras = len(df_activos[df_activos["Sexo"] == "Hembra"])
+
+                # Crias vs Adultos (Identificamos crías por la categoría 'Becerro')
+                crias = len(df_activos[df_activos["Tipo"] == "Becerro"])
+                adultos = len(df_activos) - crias
+
+                # Peso total (Carne)
+                try:
+                    peso_total = df_activos["Peso"].astype(float).sum()
+                except:
+                    peso_total = 0.0
+
+                # ---> NUEVO: CÁLCULO DE GANANCIA MEDIA DIARIA (GMD) EN GRAMOS <---
+                ganancias_diarias = []
+                for _, row in df_activos.iterrows():
+                    try:
+                        peso_actual = float(row["Peso"]) if pd.notnull(row["Peso"]) and str(row["Peso"]).strip() != "" else 0.0
+                        peso_nac = 35.0 # Estimación estándar de becerro al nacer si no hay registro
+                        
+                        # Si en el futuro usamos el registro extendido que guarda PesoNac:
+                        if "PesoNac" in df_activos.columns and pd.notnull(row["PesoNac"]) and str(row["PesoNac"]).strip() != "":
+                            peso_nac = float(row["PesoNac"])
+                            
+                        fecha_nac = pd.to_datetime(row["Nacimiento"], errors='coerce')
+                        if pd.notnull(fecha_nac):
+                            dias_vida = (pd.Timestamp(date.today()) - fecha_nac).days
+                            if dias_vida > 0 and peso_actual > peso_nac:
+                                gmd = ((peso_actual - peso_nac) / dias_vida) * 1000 # Convertido a gramos
+                                ganancias_diarias.append(gmd)
+                    except:
+                        pass
+                
+                # Promedio de todas las ganancias medias calculadas
+                ganancia_promedio_g = sum(ganancias_diarias) / len(ganancias_diarias) if ganancias_diarias else 0.0
+
+                # Leche total (Sumando el historial de leche)
+                leche_total = 0.0
+                if not df_hist.empty and "Tipo Evento" in df_hist.columns:
+                    df_leche = df_hist[df_hist["Tipo Evento"] == "PRODUCCION_LECHE"]
+                    if not df_leche.empty:
+                        try:
+                            leche_total = df_leche["Detalle 1"].astype(float).sum()
+                        except:
+                            pass
+
+                # Animales productivos (Vacas en producción)
+                vacas = len(df_activos[df_activos["Tipo"] == "Vaca"])
+
+                # --- GRÁFICA INVENTARIO ---
+                st.markdown('<div class="dash-card"><h4 style="margin-top:0;">Inventario de animales</h4>', unsafe_allow_html=True)
+                df_pie = pd.DataFrame({"Categoría": ["Crías", "Adultos"], "Cantidad": [crias, adultos]})
+                # Colores idénticos a tu captura: verde (Adultos), morado (Crías)
+                domain = ["Crías", "Adultos"]
+                range_ = ["#9c27b0", "#388e3c"] 
+                
+                pie = alt.Chart(df_pie).mark_arc(innerRadius=60).encode(
+                    theta=alt.Theta("Cantidad:Q"),
+                    color=alt.Color("Categoría:N", scale=alt.Scale(domain=domain, range=range_)),
+                    tooltip=["Categoría", "Cantidad"]
+                ).properties(height=250)
+                st.altair_chart(pie, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # --- GRID DE MÉTRICAS (Igual a la App) ---
+                st.markdown(f"""
+                <div class="grid-2-col">
+                    <div class="metric-card">
+                        <div class="metric-icon" style="color: #29b6f6;">♂️</div>
+                        <div class="metric-info">
+                            <div class="metric-title">Machos</div>
+                            <div class="metric-value">{machos}</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon" style="color: #ab47bc;">♀️</div>
+                        <div class="metric-info">
+                            <div class="metric-title">Hembras</div>
+                            <div class="metric-value">{hembras}</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">🥩</div>
+                        <div class="metric-info">
+                            <div class="metric-title" style="text-transform: none;">Promedio de ganancia de peso</div>
+                            <div class="metric-value">{ganancia_promedio_g:.1f} g</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">🥩</div>
+                        <div class="metric-info">
+                            <div class="metric-title" style="text-transform: none;">Total de carne</div>
+                            <div class="metric-value">{peso_total:.1f} kg</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">🥛</div>
+                        <div class="metric-info">
+                            <div class="metric-title" style="text-transform: none;">Producción total de leche</div>
+                            <div class="metric-value">{leche_total:.1f} L</div>
+                            <div style="font-size: 10px; color: #d32f2f;">-100.0% Mes pas...</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">🐄</div>
+                        <div class="metric-info">
+                            <div class="metric-title" style="text-transform: none;">Animales productivos</div>
+                            <div class="metric-value">{vacas}</div>
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align: center; color: #888; font-size: 12px; margin-top: 20px; padding-bottom: 20px;">
+                    La información de este panel se actualiza de forma automática en cada registro.
+                </div>
+                """, unsafe_allow_html=True)
             else:
-                st.info("👋 Registra animales para ver el tablero.")
+                st.info("👋 Registra animales para ver el tablero de la finca.")
 
         # ==========================================
         # 2. REGISTRO (MODO DUAL: RÁPIDO Y COMPLETO)
@@ -590,31 +805,63 @@ def main():
                             estado_inicial = "Sano"
                             
                             # Lista Extendida de Datos (Se guardará en columnas K, L, M...)
-                            # Orden: [ID, Tipo, Nombre, Arete, Raza, Sexo, Peso, Nacimiento, Estado, Foto, 
-                            #         Propósito, EnFinca, Padre, Madre, PesoNac, PesoDest, Peso12, Notas, Dueño, Lote, Chip, NumRaza]
                             datos_extendidos = [
                                 str(id_full), tipo_full, nombre_full, arete_full, raza_full, sexo_full, str(peso_actual_reg), str(nac_full), estado_inicial, link,
                                 proposito_full, str(en_finca_full), padre_full, madre_full, str(peso_nac), str(peso_dest), str(peso_12m), notas_full, prop_full, lote_full, num_chip_full, num_raza_full
                             ]
                             
                             guardar_animal(hoja_animales, datos_extendidos)
-                            # ==========================================
+                            # Aseguramos el estado para el menú de sanidad rápida
+        if 'sub_accion_sanidad_rapida' not in st.session_state:
+            st.session_state.sub_accion_sanidad_rapida = None
+
+        # ==========================================
         # 3. GESTIÓN TIPO APP MÓVIL (TUS IMÁGENES)
         # ==========================================
         with tab_gest:
             
-            # --- VISTA 1: LISTA ---
+            # --- VISTA 1: LISTA (AHORA CON FILTROS AVANZADOS) ---
             if st.session_state.nav_gestion == 'lista':
-                c_search, c_filter = st.columns([3, 1])
-                with c_search:
-                    busqueda = st.text_input("🔍 Buscar (Nombre o ID)", placeholder="Ej. Gloria")
-                with c_filter:
-                    st.write("") 
-                    st.caption(f"{len(df_activos)} Animales")
+                
+                # Barra de búsqueda principal
+                busqueda = st.text_input("🔍 Buscar rápido (Nombre, ID o Arete)", placeholder="Ej. Gloria, 1024...")
+                
+                # Panel desplegable de Filtros Avanzados
+                with st.expander("⚙️ Filtros Avanzados de Inventario"):
+                    c_f1, c_f2, c_f3 = st.columns(3)
+                    
+                    # Extraer opciones dinámicas de la base de datos (evita errores si hay datos viejos)
+                    opciones_tipo = df_activos['Tipo'].dropna().unique().tolist() if 'Tipo' in df_activos.columns else ["Vaca", "Toro", "Novilla", "Becerro"]
+                    opciones_estado = df_activos['Estado'].dropna().unique().tolist() if 'Estado' in df_activos.columns else ["Sano", "Enfermo", "Preñada"]
+                    opciones_lote = df_activos['Lote'].dropna().unique().tolist() if 'Lote' in df_activos.columns else ["General", "Lote 1", "Lote 2", "Enfermería"]
+                    
+                    with c_f1: f_cat = st.multiselect("Categoría", opciones_tipo)
+                    with c_f2: f_est = st.multiselect("Estado Médico/Repro.", opciones_estado)
+                    with c_f3: 
+                        if 'Lote' in df_activos.columns:
+                            f_lote = st.multiselect("Ubicación / Lote", opciones_lote)
+                        else:
+                            f_lote = []
+                            st.write("*(Lote no disponible en BD)*")
 
-                df_show = df_activos
+                # Aplicar lógica de filtrado
+                df_show = df_activos.copy()
+                
                 if busqueda:
-                    df_show = df_activos[df_activos.apply(lambda row: busqueda.lower() in str(row.values).lower(), axis=1)]
+                    df_show = df_show[df_show.apply(lambda row: busqueda.lower() in str(row.values).lower(), axis=1)]
+                if f_cat:
+                    df_show = df_show[df_show['Tipo'].isin(f_cat)]
+                if f_est:
+                    df_show = df_show[df_show['Estado'].isin(f_est)]
+                if f_lote and 'Lote' in df_show.columns:
+                    df_show = df_show[df_show['Lote'].isin(f_lote)]
+
+                # Contador dinámico
+                st.markdown(f"""
+                <div style="background-color: #e8f5e9; padding: 8px 15px; border-radius: 5px; color: #2e7d32; font-weight: bold; font-size: 14px; margin-bottom: 15px; border-left: 4px solid #4CAF50;">
+                    Mostrando {len(df_show)} de {len(df_activos)} animales en la finca
+                </div>
+                """, unsafe_allow_html=True)
 
                 if not df_show.empty:
                     for index, row in df_show.iterrows():
@@ -637,7 +884,7 @@ def main():
                                     ir_a_perfil(row['ID'])
                                     st.rerun()
                 else:
-                    st.info("No hay animales activos.")
+                    st.info("No se encontraron animales con esos filtros.")
 
             # --- VISTA 2: PERFIL ---
             elif st.session_state.nav_gestion == 'perfil':
@@ -689,14 +936,14 @@ def main():
                     st.session_state.accion_activa = "venta"
                     st.info("✅ Modo Venta Activado. Ve a la pestaña '⚡ RÁPIDO' para completar los datos.")
 
-            # --- VISTA 3: PRODUCCIÓN ---
+            # --- VISTA 3: PRODUCCIÓN (CORREGIDA) ---
             elif st.session_state.nav_gestion == 'produccion':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
 
                 st.markdown(f"""
                 <div style='background-color: #2e7d32; padding: 15px; border-radius: 10px; color: white; margin-bottom: 20px;'>
-                    <h3 style='margin:0;'>Producción: {datos['Nombre']}</h3>
+                    <h3 style='margin:0;'>Producción</h3>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -736,15 +983,14 @@ def main():
                             try: promedio_leche = hist_leche["Detalle 1"].astype(float).mean()
                             except: pass
 
-                        st.subheader("Producción de leche")
+                        st.markdown("<h3>Producción de leche</h3>", unsafe_allow_html=True)
                         st.caption(f"Promedio diario: {promedio_leche:.1f} L")
                         
                         st.markdown("""
-                        <div class="tabla-header">
-                            <div style="width:30%">Fecha</div>
-                            <div style="width:30%">Concentr...</div>
-                            <div style="width:30%">Total leche</div>
-                            <div style="width:10%"></div>
+                        <div style="background-color: #4CAF50; color: white; padding: 10px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; font-weight: bold; font-size: 14px;">
+                            <div style="width:33%">Fecha</div>
+                            <div style="width:33%">Concentr...</div>
+                            <div style="width:33%">Total leche</div>
                         </div>
                         """, unsafe_allow_html=True)
                         
@@ -757,50 +1003,78 @@ def main():
                                 except: pass
                                 
                                 st.markdown(f"""
-                                <div class="tabla-row">
-                                    <div style="width:30%">{row['Fecha']}</div>
-                                    <div style="width:30%">{concentrado_txt}</div>
-                                    <div style="width:30%">{row['Detalle 1']} L</div>
-                                    <div style="width:10%; color: red;">Wait</div> 
+                                <div style="background-color: white; padding: 10px; border-bottom: 1px solid #eee; border-left: 1px solid #eee; border-right: 1px solid #eee; display: flex; justify-content: space-between; font-size: 14px;">
+                                    <div style="width:33%">{row['Fecha']}</div>
+                                    <div style="width:33%">{concentrado_txt}</div>
+                                    <div style="width:33%">{row['Detalle 1']} L</div>
                                 </div>
                                 """, unsafe_allow_html=True)
                         else: st.info("Sin registros de leche.")
 
                         st.write("")
                         peso_actual = datos['Peso']
-                        st.subheader(f"Evolución de peso: <span style='color:green'>Actual {peso_actual} kg</span>", anchor=False, help=None)
-                        st.caption("Ganancia diaria: -- kg")
+                        st.markdown(f"<h3>Evolución de peso: <span style='color:#4CAF50'>Actual {peso_actual} kg</span></h3>", unsafe_allow_html=True)
+                        
+                        # Calculamos la ganancia diaria general si hay al menos 2 pesos
+                        ganancia_diaria_general = "--"
+                        if len(hist_peso) > 1:
+                            try:
+                                hist_peso_ordenado = hist_peso.sort_values(by="Fecha", ascending=True)
+                                p_inicial = float(hist_peso_ordenado.iloc[0]["Detalle 1"])
+                                p_final = float(hist_peso_ordenado.iloc[-1]["Detalle 1"])
+                                f_inicial = pd.to_datetime(hist_peso_ordenado.iloc[0]["Fecha"])
+                                f_final = pd.to_datetime(hist_peso_ordenado.iloc[-1]["Fecha"])
+                                dias = (f_final - f_inicial).days
+                                if dias > 0:
+                                    ganancia_diaria_general = f"{((p_final - p_inicial) / dias):.2f}"
+                            except: pass
+
+                        st.caption(f"Ganancia diaria: {ganancia_diaria_general} kg")
 
                         st.markdown("""
-                        <div class="tabla-header">
-                            <div style="width:30%">Fecha</div>
-                            <div style="width:30%">Peso</div>
-                            <div style="width:30%">Ganancia</div>
-                            <div style="width:10%"></div>
+                        <div style="background-color: #4CAF50; color: white; padding: 10px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; font-weight: bold; font-size: 14px;">
+                            <div style="width:33%">Fecha</div>
+                            <div style="width:33%">Peso</div>
+                            <div style="width:33%">Ganancia</div>
                         </div>
                         """, unsafe_allow_html=True)
 
                         if not hist_peso.empty:
-                            hist_peso_rev = hist_peso.iloc[::-1].reset_index()
+                            # Ordenamos cronológicamente para calcular la ganancia entre registros
+                            hist_peso = hist_peso.sort_values(by="Fecha", ascending=True).reset_index(drop=True)
+                            ganancias = ["--"]
+                            for i in range(1, len(hist_peso)):
+                                try:
+                                    peso_act = float(hist_peso.iloc[i]["Detalle 1"])
+                                    peso_ant = float(hist_peso.iloc[i-1]["Detalle 1"])
+                                    diff = peso_act - peso_ant
+                                    ganancia_str = f"+{diff:.1f} kg" if diff > 0 else f"{diff:.1f} kg"
+                                    ganancias.append(ganancia_str)
+                                except:
+                                    ganancias.append("--")
+                            
+                            hist_peso["Ganancia"] = ganancias
+                            # Invertimos para mostrar el más reciente arriba
+                            hist_peso_rev = hist_peso.iloc[::-1]
+
                             for i, row in hist_peso_rev.iterrows():
                                 st.markdown(f"""
-                                <div class="tabla-row">
-                                    <div style="width:30%">{row['Fecha']}</div>
-                                    <div style="width:30%">{row['Detalle 1']} kg</div>
-                                    <div style="width:30%">--</div>
-                                    <div style="width:10%; color: red;">Wait</div>
+                                <div style="background-color: white; padding: 10px; border-bottom: 1px solid #eee; border-left: 1px solid #eee; border-right: 1px solid #eee; display: flex; justify-content: space-between; font-size: 14px;">
+                                    <div style="width:33%">{row['Fecha']}</div>
+                                    <div style="width:33%">{row['Detalle 1']} kg</div>
+                                    <div style="width:33%">{row['Ganancia']}</div>
                                 </div>
                                 """, unsafe_allow_html=True)
                         else: st.info("Sin registros de peso.")
 
-                    st.write("")
-                    st.markdown("---")
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    # Botones apilados al centro como en el diseño móvil
+                    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+                    with col_btn2:
                         if st.button("AGREGAR PESO", type="primary", use_container_width=True):
                             st.session_state.sub_accion_produccion = 'add_peso'
                             st.rerun()
-                    with col_b2:
+                        st.write("")
                         if st.button("AGREGAR LECHE", type="primary", use_container_width=True):
                             st.session_state.sub_accion_produccion = 'add_leche'
                             st.rerun()
@@ -823,6 +1097,9 @@ def main():
                                 if fp_peso > 0:
                                     datos_peso = [str(fp_fecha), "PESAJE", animal_id, str(fp_peso), fp_alim, fp_notas]
                                     guardar_evento(sh, datos_peso, "Pesaje")
+                                    # Actualizamos el peso actual en la hoja de animales
+                                    cambiar_peso_actual = [animal_id, datos["Tipo"], datos["Nombre"], datos["Arete"], datos["Raza"], datos["Sexo"], str(fp_peso), str(datos["Nacimiento"]), datos["Estado"], datos["Foto"]]
+                                    actualizar_animal_completo(sh.get_worksheet(0), animal_id, cambiar_peso_actual)
                                     st.session_state.sub_accion_produccion = None
                                     st.rerun()
                                 else: st.error("El peso debe ser mayor a 0")
@@ -1400,7 +1677,59 @@ def main():
 
             st.markdown("---")
             
-            if st.session_state.accion_activa == "venta":
+            # --- COMPRA DE GANADO ---
+            if st.session_state.accion_activa == "compra":
+                st.markdown("<h3>⬅ Compra de ganado</h3>", unsafe_allow_html=True)
+                with st.form("form_compra_ganado"):
+                    c_c1, c_c2 = st.columns(2)
+                    with c_c1: f_fecha_compra = st.date_input("Fecha *", date.today())
+                    with c_c2: f_moneda_compra = st.selectbox("Moneda", ["VES", "USD", "COP"])
+
+                    st.markdown('<div class="app-header">Ubicación</div>', unsafe_allow_html=True)
+                    c_u1, c_u2 = st.columns(2)
+                    with c_u1: f_pais = st.selectbox("País", ["(+58) Venezuela", "Colombia", "Brasil", "Otro"])
+                    with c_u2: f_region = st.selectbox("Región", ["Bolívar", "Anzoátegui", "Monagas", "Otra"])
+                    f_ciudad = st.selectbox("Ciudad", ["Ciudad Bolívar", "Puerto Ordaz", "Otra"])
+
+                    with st.expander("Información del vendedor", expanded=False):
+                        f_vend_nombre = st.text_input("Nombre/Empresa")
+                        c_v1, c_v2 = st.columns(2)
+                        with c_v1: f_vend_tel = st.text_input("Teléfono/Celular")
+                        with c_v2: f_vend_id = st.text_input("Número de identificación")
+
+                    with st.expander("Información del transporte", expanded=False):
+                        f_trans_emp = st.text_input("Empresa de transporte")
+                        f_trans_guia = st.text_input("Número guía de transporte")
+
+                    st.markdown('<div class="app-header">Datos generales</div>', unsafe_allow_html=True)
+                    c_d1, c_d2 = st.columns(2)
+                    with c_d1: f_tipo_animal = st.selectbox("Tipo de animal", ["Bovino", "Porcino", "Ovino", "Caprino", "Equino", "Bufalino", "Otro"])
+                    with c_d2: f_precio_kg = st.number_input("Precio por kg *", min_value=0.0)
+
+                    f_responsable = st.text_input("Persona responsable de la compra *")
+                    f_notas_compra = st.text_area("Notas y observaciones")
+
+                    st.markdown("---")
+                    c_btn_c1, c_btn_c2 = st.columns(2)
+                    with c_btn_c1:
+                        if st.form_submit_button("Anterior"):
+                            st.session_state.accion_activa = None
+                            st.rerun()
+                    with c_btn_c2:
+                        if st.form_submit_button("Siguiente", type="primary"):
+                            if f_precio_kg > 0 and f_responsable:
+                                detalle_compra = f"Vendedor: {f_vend_nombre} | Resp: {f_responsable}"
+                                notas_compra = f"Ubicación: {f_ciudad}, {f_region} | Precio: {f_precio_kg} {f_moneda_compra}/kg | {f_notas_compra}"
+                                datos_compra = [str(f_fecha_compra), "COMPRA", "LOTE EXTERNO", f_tipo_animal, detalle_compra, notas_compra]
+                                guardar_evento(sh, datos_compra, "Compra de Ganado")
+                                st.session_state.accion_activa = None
+                                st.success("Compra registrada con éxito.")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("Por favor completa los campos obligatorios (*) como el Precio por kg y el Responsable.")
+
+            elif st.session_state.accion_activa == "venta":
                 st.subheader("🚛 Nueva Venta de Ganado")
                 with st.form("form_venta_completa"):
                     c_f1, c_f2 = st.columns(2)
@@ -1462,16 +1791,147 @@ def main():
                         datos_peso = [str(p_fecha), "PESAJE", p_animal, str(p_kilos), "", "Control"]
                         guardar_evento(sh, datos_peso, "Pesaje")
 
+            # --- NUEVO MENÚ DE SANIDAD (TRATAMIENTO MASIVO / VACUNACIÓN MASIVA) ---
             elif st.session_state.accion_activa == "sanidad":
-                st.subheader("💉 Registro Sanitario")
-                with st.form("form_sanidad"):
-                    s_animal = st.selectbox("Animal", lista_ids_activos)
-                    s_tipo = st.selectbox("Tipo", ["Vacuna", "Vitaminas", "Antibiótico", "Desparasitante"])
-                    s_producto = st.text_input("Producto")
-                    s_notas = st.text_area("Observaciones")
-                    if st.form_submit_button("Guardar"):
-                        datos_sanidad = [str(date.today()), "SANIDAD", s_animal, s_tipo, s_producto, s_notas]
-                        guardar_evento(sh, datos_sanidad, "Tratamiento")
+                if st.session_state.sub_accion_sanidad_rapida is None:
+                    st.markdown("<h3>⬅ Selecciona una opción</h3>", unsafe_allow_html=True)
+                    c_s1, c_s2 = st.columns(2)
+                    with c_s1:
+                        if st.button("🩺\nTratamiento masivo", use_container_width=True):
+                            st.session_state.sub_accion_sanidad_rapida = "tratamiento_masivo"
+                            st.rerun()
+                    with c_s2:
+                        if st.button("💉\nVacunación masiva", use_container_width=True):
+                            st.session_state.sub_accion_sanidad_rapida = "vacunacion_masiva"
+                            st.rerun()
+                
+                elif st.session_state.sub_accion_sanidad_rapida == "tratamiento_masivo":
+                    st.markdown("""
+                    <div style='background-color: #2e7d32; padding: 10px; color: white; border-radius: 5px 5px 0 0;'>
+                        <h3 style='margin:0;'>⬅ Tratamiento masivo</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button("⬅ Volver a opciones de sanidad"):
+                        st.session_state.sub_accion_sanidad_rapida = None
+                        st.rerun()
+                    
+                    # Filtros dinámicos (Fuera del formulario para que el conteo se actualice al instante)
+                    st.markdown('<br>', unsafe_allow_html=True)
+                    c_tm1, c_tm2 = st.columns(2)
+                    with c_tm1: f_tipo_animal_tm = st.selectbox("Tipo de animal *", LISTA_ESPECIES, index=0, key="tipo_anim_tm")
+                    with c_tm2: f_filtro_tm = st.selectbox("Seleccionar animales", ["Todos los animales", "Todos los machos", "Todas las hembras", "Selección manual"], key="filtro_tm")
+                    
+                    ids_afectados_tm = []
+                    if not df_activos.empty:
+                        # Filtrar según lo seleccionado
+                        if f_filtro_tm == "Todos los animales":
+                            ids_afectados_tm = df_activos['ID'].tolist()
+                        elif f_filtro_tm == "Todos los machos":
+                            ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
+                        elif f_filtro_tm == "Todas las hembras":
+                            ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
+                        elif f_filtro_tm == "Selección manual":
+                            ids_afectados_tm = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_tm")
+                    
+                    # Conteo reactivo
+                    st.markdown(f"""
+                    <div style='background-color: #e0e0e0; padding: 10px; font-weight: bold; text-align: right; border-radius: 0 0 5px 5px; margin-bottom: 15px;'>
+                        Total de animales seleccionados: {len(ids_afectados_tm)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Formulario de datos médicos
+                    with st.form("form_tratamiento_masivo_full"):
+                        ftm_nombre = st.text_input("Nombre del tratamiento")
+                        c_f1, c_f2 = st.columns(2)
+                        with c_f1: ftm_fecha = st.date_input("Fecha *", date.today())
+                        with c_f2: ftm_dias = st.number_input("Días de tratamiento...", min_value=1, step=1)
+                        
+                        c_t1, c_t2 = st.columns(2)
+                        with c_t1: ftm_tipo = st.selectbox("Tipo de Trat... *", TIPOS_TRATAMIENTO)
+                        with c_t2: ftm_enfermedad = st.selectbox("Enfermedad *", LISTA_ENFERMEDADES)
+                        
+                        ftm_diag = st.text_input("Diagnóstico")
+                        ftm_med = st.text_input("Medicamento *")
+                        ftm_notas = st.text_area("Notas y observaciones")
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        submitted_tm = st.form_submit_button("Registrar", type="primary")
+                        if submitted_tm:
+                            if not ids_afectados_tm:
+                                st.error("Debe seleccionar al menos un animal.")
+                            elif not ftm_med:
+                                st.error("El campo 'Medicamento' es obligatorio.")
+                            else:
+                                with st.spinner(f"Registrando tratamiento para {len(ids_afectados_tm)} animales..."):
+                                    for animal_id in ids_afectados_tm:
+                                        d1 = f"{ftm_tipo} | {ftm_enfermedad}"
+                                        d2 = f"{ftm_med} | {ftm_dias} días"
+                                        notas_f = f"Masivo: {ftm_nombre} | Diag: {ftm_diag} | {ftm_notas}"
+                                        datos_vet = [str(ftm_fecha), "TRATAMIENTO", str(animal_id), d1, d2, notas_f]
+                                        guardar_evento(sh, datos_vet, f"Tratamiento")
+                                st.success(f"¡Tratamiento masivo registrado con éxito!")
+                                time.sleep(2)
+                                st.session_state.sub_accion_sanidad_rapida = None
+                                st.rerun()
+
+                elif st.session_state.sub_accion_sanidad_rapida == "vacunacion_masiva":
+                    st.markdown("""
+                    <div style='background-color: #2e7d32; padding: 10px; color: white; border-radius: 5px 5px 0 0;'>
+                        <h3 style='margin:0;'>⬅ Vacunación masiva</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button("⬅ Volver a opciones de sanidad"):
+                        st.session_state.sub_accion_sanidad_rapida = None
+                        st.rerun()
+
+                    # Filtros dinámicos
+                    st.markdown('<br>', unsafe_allow_html=True)
+                    c_vm1, c_vm2 = st.columns(2)
+                    with c_vm1: f_tipo_animal_vm = st.selectbox("Tipo de animal *", LISTA_ESPECIES, index=0, key="tipo_anim_vac")
+                    with c_vm2: f_filtro_vm = st.selectbox("Seleccionar animales", ["Todos los animales", "Todos los machos", "Todas las hembras", "Selección manual"], key="filtro_vac")
+                    
+                    ids_afectados_vac = []
+                    if not df_activos.empty:
+                        # Filtrar según lo seleccionado
+                        if f_filtro_vm == "Todos los animales":
+                            ids_afectados_vac = df_activos['ID'].tolist()
+                        elif f_filtro_vm == "Todos los machos":
+                            ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
+                        elif f_filtro_vm == "Todas las hembras":
+                            ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
+                        elif f_filtro_vm == "Selección manual":
+                            ids_afectados_vac = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_vac")
+                    
+                    # Conteo reactivo
+                    st.markdown(f"""
+                    <div style='background-color: #e0e0e0; padding: 10px; font-weight: bold; text-align: right; border-radius: 0 0 5px 5px; margin-bottom: 15px;'>
+                        Total de animales seleccionados: {len(ids_afectados_vac)}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # Formulario de vacunación
+                    with st.form("form_vacunacion_masiva_full"):
+                        fvm_fecha = st.date_input("Fecha *", date.today())
+                        fvm_vacuna = st.selectbox("Vacuna *", LISTA_VACUNAS)
+                        fvm_notas = st.text_area("Notas y observaciones")
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        submitted_vm = st.form_submit_button("Registrar", type="primary")
+                        if submitted_vm:
+                            if not ids_afectados_vac:
+                                st.error("Debe seleccionar al menos un animal.")
+                            else:
+                                with st.spinner(f"Registrando vacunación para {len(ids_afectados_vac)} animales..."):
+                                    for animal_id in ids_afectados_vac:
+                                        datos_vac = [str(fvm_fecha), "VACUNACION", str(animal_id), fvm_vacuna, "", f"Masiva | {fvm_notas}"]
+                                        guardar_evento(sh, datos_vac, "Vacunación")
+                                st.success(f"¡Vacunación masiva registrada con éxito!")
+                                time.sleep(2)
+                                st.session_state.sub_accion_sanidad_rapida = None
+                                st.rerun()
 
             elif st.session_state.accion_activa is None:
                 st.info("👆 Selecciona una opción arriba.")
@@ -1482,14 +1942,207 @@ def main():
         with tab_ventas:
             st.header("💰 Historial de Ventas")
             if not df_hist.empty and "Tipo Evento" in df_hist.columns:
-                mask_venta = df_hist["Tipo Evento"].astype(str).str.contains("VENTA", case=False, na=False)
+                mask_venta = df_hist["Tipo Evento"].astype(str).str.contains("VENTA|COMPRA", case=False, na=False)
                 df_ventas = df_hist[mask_venta]
                 if not df_ventas.empty:
-                    st.dataframe(df_ventas[["Fecha", "ID Animal", "Detalle 1", "Detalle 2"]], use_container_width=True, hide_index=True)
+                    st.dataframe(df_ventas[["Fecha", "Tipo Evento", "Detalle 1", "Detalle 2"]], use_container_width=True, hide_index=True)
                 else:
-                    st.warning("No hay ventas registradas.")
+                    st.warning("No hay ventas ni compras registradas.")
             else:
                 st.info("Sin historial.")
+
+        # ==========================================
+        # 6. ALERTAS AUTOMÁTICAS
+        # ==========================================
+        with tab_alertas:
+            st.header("🔔 Centro de Alertas")
+            st.write("El sistema analiza automáticamente tu rebaño para detectar acciones pendientes.")
+
+            alertas_generadas = []
+
+            # 1. Alertas de Destete (Becerros >= 210 días)
+            if not df_activos.empty:
+                becerros = df_activos[df_activos['Tipo'] == 'Becerro']
+                for _, row in becerros.iterrows():
+                    try:
+                        nac = pd.to_datetime(row['Nacimiento'])
+                        dias_vida = (pd.Timestamp(date.today()) - nac).days
+                        if dias_vida >= 210:
+                            alertas_generadas.append({
+                                "tipo": "Destete", "animal": f"{row['Nombre']} (ID: {row['ID']})",
+                                "msg": f"Alcanzó la edad de destete ({dias_vida} días).",
+                                "icon": "🍼", "color": "#f57c00"
+                            })
+                    except: pass
+
+            # 2. Alertas Reproductivas (Parto y Secado)
+            if not df_activos.empty and not df_hist.empty:
+                vacas_prenadas = df_activos[df_activos['Estado'] == 'Preñada']
+                df_repro = df_hist[df_hist['Tipo Evento'].isin(['FECUNDACION', 'CHEQUEO_REPRO'])]
+                for _, vaca in vacas_prenadas.iterrows():
+                    eventos = df_repro[df_repro['ID Animal'] == vaca['ID']].sort_values(by='Fecha')
+                    if not eventos.empty:
+                        ult_fecha = pd.to_datetime(eventos.iloc[-1]['Fecha'])
+                        dias_gest = (pd.Timestamp(date.today()) - ult_fecha).days
+                        if dias_gest >= 280:
+                            alertas_generadas.append({
+                                "tipo": "Alerta de Parto", "animal": f"{vaca['Nombre']} (ID: {vaca['ID']})",
+                                "msg": f"Posible parto inminente. {dias_gest} días de gestación.",
+                                "icon": "🚨", "color": "#d32f2f"
+                            })
+                        elif 220 <= dias_gest < 280:
+                            alertas_generadas.append({
+                                "tipo": "Secado de Vaca", "animal": f"{vaca['Nombre']} (ID: {vaca['ID']})",
+                                "msg": f"Requiere secado para preparar el parto. {dias_gest} días de gestación.",
+                                "icon": "🛑", "color": "#1976d2"
+                            })
+
+            # 3. Alertas Sanitarias (Tratamientos por terminar)
+            if not df_hist.empty:
+                df_trat = df_hist[df_hist['Tipo Evento'] == 'TRATAMIENTO']
+                for _, trat in df_trat.iterrows():
+                    try:
+                        f_inicio = pd.to_datetime(trat['Fecha'])
+                        det2 = str(trat['Detalle 2'])
+                        if "días" in det2:
+                            dias_trat = int(det2.split("|")[1].replace("días", "").strip())
+                            f_fin = f_inicio + pd.Timedelta(days=dias_trat)
+                            hoy = pd.Timestamp(date.today())
+                            if f_inicio <= hoy <= f_fin:
+                                dias_restantes = (f_fin - hoy).days
+                                if dias_restantes <= 2:
+                                    enfermedad = trat['Detalle 1'].split('|')[1] if '|' in trat['Detalle 1'] else "Tratamiento"
+                                    alertas_generadas.append({
+                                        "tipo": "Atención Sanitaria", "animal": f"ID: {trat['ID Animal']}",
+                                        "msg": f"{enfermedad} termina en {dias_restantes} día(s). Revisar evolución.",
+                                        "icon": "💊", "color": "#388e3c"
+                                    })
+                    except: pass
+
+            # Renderizar Alertas
+            if alertas_generadas:
+                for alerta in alertas_generadas:
+                    st.markdown(f"""
+                    <div class="alerta-card" style="border-left-color: {alerta['color']};">
+                        <div class="alerta-icon">{alerta['icon']}</div>
+                        <div class="alerta-content">
+                            <div class="alerta-title" style="color: {alerta['color']};">{alerta['tipo']}</div>
+                            <p class="alerta-desc"><span class="alerta-animal">{alerta['animal']}</span> - {alerta['msg']}</p>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("✅ Todo al día. No hay alertas pendientes de parto, destete o sanidad.")
+
+        # ==========================================
+        # 7. MÓDULO DE REPORTES Y EXPORTACIÓN
+        # ==========================================
+        with tab_reportes:
+            st.header("📑 Reportes y Exportación")
+            st.write("Genera y descarga informes de la finca en formato compatible con Excel (.csv) o PDF clínico.")
+            
+            col_rep1, col_rep2 = st.columns(2)
+            
+            with col_rep1:
+                st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+                st.subheader("1. Inventario Activo")
+                st.write("Descarga la lista completa de todos los animales actualmente en la finca.")
+                if not df_activos.empty:
+                    csv_inventario = df_activos.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Descargar Inventario (CSV)",
+                        data=csv_inventario,
+                        file_name=f"Inventario_Finca_{date.today()}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                else:
+                    st.warning("No hay animales activos para exportar.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+                st.subheader("3. Producción Consolidada")
+                st.write("Exporta todos los registros de pesajes y producción de leche.")
+                if not df_hist.empty:
+                    df_prod = df_hist[df_hist['Tipo Evento'].isin(['PESAJE', 'PRODUCCION_LECHE'])]
+                    if not df_prod.empty:
+                        csv_prod = df_prod.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Descargar Producción (CSV)",
+                            data=csv_prod,
+                            file_name=f"Produccion_Total_{date.today()}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("No hay registros de producción.")
+                else:
+                    st.info("No hay historial disponible.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with col_rep2:
+                st.markdown('<div class="dash-card">', unsafe_allow_html=True)
+                st.subheader("2. Historial Clínico (PDF)")
+                st.write("Genera un reporte médico detallado de un animal en formato PDF.")
+                
+                animal_reporte = st.selectbox("Seleccione el animal:", lista_ids_todos, key="sel_rep_animal")
+                
+                if animal_reporte and not df.empty and not df_hist.empty:
+                    try:
+                        info_animal = df[df['ID'] == animal_reporte].iloc[0]
+                        hist_animal = df_hist[df_hist['ID Animal'] == str(animal_reporte)]
+                        hist_medico = hist_animal[hist_animal['Tipo Evento'].isin(['TRATAMIENTO', 'VACUNACION', 'MASTITIS', 'MUERTE'])]
+                        
+                        if st.button("📄 Generar PDF Clínico", type="primary", use_container_width=True):
+                            # Lógica para construir el PDF
+                            pdf = FPDF()
+                            pdf.add_page()
+                            
+                            # Título principal
+                            pdf.set_font("Arial", 'B', 16)
+                            pdf.cell(200, 10, txt="HISTORIAL CLÍNICO VETERINARIO", ln=True, align='C')
+                            pdf.ln(5)
+                            
+                            # Datos Generales
+                            pdf.set_font("Arial", 'B', 12)
+                            pdf.cell(200, 8, txt=f"FECHA DE REPORTE: {date.today()}", ln=True)
+                            pdf.set_font("Arial", '', 12)
+                            pdf.cell(200, 8, txt=f"ANIMAL: {info_animal['Nombre']} (ID: {info_animal['ID']})", ln=True)
+                            pdf.cell(200, 8, txt=f"RAZA: {info_animal['Raza']} | SEXO: {info_animal['Sexo']} | NAC: {info_animal['Nacimiento']}", ln=True)
+                            pdf.cell(200, 8, txt=f"ESTADO ACTUAL: {info_animal['Estado']}", ln=True)
+                            pdf.ln(5)
+                            
+                            # Registros Médicos
+                            pdf.set_font("Arial", 'B', 14)
+                            pdf.cell(200, 10, txt="REGISTROS MÉDICOS:", ln=True)
+                            
+                            if hist_medico.empty:
+                                pdf.set_font("Arial", '', 12)
+                                pdf.cell(200, 8, txt="No se encontraron registros médicos para este animal.", ln=True)
+                            else:
+                                for _, ev in hist_medico.iterrows():
+                                    pdf.set_font("Arial", 'B', 12)
+                                    pdf.cell(200, 8, txt=f"[{ev['Fecha']}] {ev['Tipo Evento']}", ln=True)
+                                    pdf.set_font("Arial", '', 12)
+                                    pdf.multi_cell(0, 8, txt=f"Detalle: {ev['Detalle 1']} | {ev['Detalle 2']}")
+                                    if str(ev['Notas']).strip():
+                                        pdf.multi_cell(0, 8, txt=f"Notas: {ev['Notas']}")
+                                    pdf.ln(2)
+                            
+                            # Output PDF to bytes (Codificamos a latin-1 para compatibilidad FPDF)
+                            pdf_bytes = pdf.output(dest='S').encode('latin-1')
+                            
+                            st.success("✅ PDF Generado con éxito.")
+                            st.download_button(
+                                label="⬇️ Haz clic aquí para descargar el PDF",
+                                data=pdf_bytes,
+                                file_name=f"Historial_{info_animal['Nombre']}_{info_animal['ID']}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                    except Exception as e:
+                        st.error(f"Error al generar PDF: {e}")
+                st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
