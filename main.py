@@ -3,12 +3,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import altair as alt
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import os
 import time
-import requests # Necesario para ImgBB
+import requests 
 import io 
-from fpdf import FPDF # NUEVO: Librería para generar PDFs profesionales
+from fpdf import FPDF 
+import uuid 
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Sistema Ganadero Élite", page_icon="🐮", layout="wide")
@@ -23,24 +24,83 @@ OPCIONES_ALIMENTACION = [
     "Estabulación", "Otros"
 ]
 
-# --- NUEVAS LISTAS PARA REGISTRO COMPLETO (ACTUALIZACIÓN) ---
 LISTA_ESPECIES = ["Bovino", "Porcino", "Ovino", "Caprino", "Equino", "Bufalino", "Otro"]
 
+# --- LISTA MAESTRA DE RAZAS ACTUALIZADA ---
 LISTA_RAZAS_GLOBAL = [
-    # Bovinos
-    "Brahman", "Gyr", "Holstein", "Jersey", "Angus", "Brangus", "Senepol", 
-    "Guzerat", "Nelore", "Pardo Suizo", "Simmental", "Charolais", "Hereford", 
-    "Normando", "Limousin", "Mestizo / Cruzado", "Criollo",
-    # Porcinos
-    "Landrace", "Yorkshire", "Duroc", "Pietrain", "Hampshire",
-    # Ovinos/Caprinos
-    "Dorper", "Katahdin", "Pelibuey", "Boer", "Saanen", "Alpina",
-    "Otro"
+    "7 Colores", "Abigar", "Abondance", "Abyssinian Shorthorned Zebu", "Aceh", "Achham", 
+    "Adamawa", "Adaptaur", "Africangus", "Afrikane", "Agerolese", "Ala Tau", "Alambadi", 
+    "Albanian", "Albera", "Alderney", "Alentejana", "Aleutian Wild", "Aliab Dinka", 
+    "Alistana-Sanabresa", "Allmogekor", "Alur", "American", "American Beef Friesian", 
+    "American Brown Swiss", "American White Park", "Americano", "Amerifax", "Amiata", 
+    "Amrit Mahal", "Anatolian Black", "Andalusian Black", "Angeln", "Angoni", "Angun Negro", 
+    "Angus", "Angus Hybrid", "Angus-Nelore", "Ankole-Watusi", "Aosta", "Apulian Podolian", 
+    "Arado", "Armorican", "Arouquesa", "Asturian Mountain", "Asturiana de los Valles", 
+    "Aubrac", "Australian Braford", "Australian Lowline", "Ayrshire", "Azul Belga", "Baherie", 
+    "Bakosi", "Balancer", "Bale", "Baoule", "Barrosã", "Barzona", "Batangas", "Bazadaise", 
+    "Beefalo", "Beefmaker", "Beefmaster", "Belgian Red", "Belmont Red", "Belted Galloway", 
+    "Bernese", "Berrendas", "Betizu", "Bianca Val Padana", "Blaarkop", "Black Angus", 
+    "Black Baldy", "Black Hereford", "Black Pied", "Black Sardo", "Blanca Cacerena", 
+    "Blanco Orejinegro BEW", "Blue Grey", "Bohus Polled", "Bon", "Bonsmara", "Boran", 
+    "Bororo", "Braford", "Brahman", "Brahman Rojo", "Brahmousin", "Brangus", "Braunvieh", 
+    "Brava", "British White", "BueLingo", "Burlina", "Busa", "Butana", "Cabannina", "Cachena", 
+    "Calvana", "Calvesiana", "Camargue", "Campbell Island", "Canadian Speckle Park", 
+    "Canadienne", "Canaria", "Canchim", "Caracu are Brazilian", "Cardena Andaluza", 
+    "Carinthian Blondvieh", "Carora", "Casanareño", "Cebú", "Charbray", "Charolais", 
+    "Chiangus", "Chianina", "Chillingham", "Chinese Black Pied", "Chinese Central Plains Yellow", 
+    "Chinese Northern Yellow", "Chino Santandereano", "Chirikof Island", "Color Sided White Back", 
+    "Commercial", "Corriente", "Costeño con Cuernos", "Criollo", "Criollo Lechero Tropical", 
+    "Crioulo Lageano Longhorn", "Crossbred", "Cruzado", "Dairy Shorthorn", "Dajal", 
+    "Danish Black-Pied", "Danish Jersey", "Danish Red", "Deep Red", "Desconocida", "Devon", 
+    "Dexter", "Dhanni", "Doayo", "Doela", "Droughtmaster", "Dulong", "Dutch Belted", 
+    "Dwarf Lulu", "Dølafe", "East Anatolian Red", "Eastern Finncattle", "Eastern Red Polled", 
+    "Enderby Island", "English Longhorn", "Ennstal Mountain Pied", "Estonian Holstein", 
+    "Estonian Native", "Estonian Red", "Evolene", "F1", "F1-Beefmaster", "F1-Brahman", 
+    "F1-Brahmousin", "F1-Normando", "F1-Simmental", "F2-Brahman", "F2-Normando", "F2-Simmental", 
+    "Finnish", "Finnish Ayrshire", "Fjall", "Fleckvieh", "Florida Cracker", "French Simmental", 
+    "Fresian Red and White", "Fribourg Black and White", "Fribourgeoise", "Fulani Sudanese", 
+    "Garfagnina", "Garvonesa", "Gascon", "Gelbray", "Gelbvieh", "Georgian Mountain", 
+    "German Angus", "German Black Pied", "German Red Pied", "Girolando", "Glan", "Gloucester", 
+    "Gobra", "Goffa", "Golden Pied", "Grand Noir du Berry", "Greek Shorthorn", "Greek Steppe", 
+    "Grey Alpine", "Greyman", "Groningen Whiteheaded", "Gudali", "Guernsey", "Guzerat", "Gyr", 
+    "Hallikar", "Hammer", "Harar", "Hariana", "Harton del Valle", "Harz Red Mountain", 
+    "Hays Converter", "Heck", "Hereford", "Herens", "Highland", "Hinterwald", "Holando-Argentino", 
+    "Holstein Friesian", "Holstein Negro", "Holstein Rojo", "Holzer", "Horro", "Hungarian Grey", 
+    "Hybridmaster", "Icelandic", "Illawarras", "Improved Red and White", "Indubrasil", "INRA 95", 
+    "Irish Black and Red", "Irish Moiled", "Israeli", "Israeli Red", "Istoben", "Jamaica Black", 
+    "Jamaica Hope", "Jamaica Red", "Jarmelista", "Jem-Jem", "Jerhol", "Jersey", "Jersyrolando", 
+    "Jijiga", "Jutland", "Kalmyk", "Kangayam", "Kankrej", "Karan Swiss", "Kazakh White-Headed", 
+    "Kerry", "Kholmogory", "Kostroma", "Kurgan", "Kuri", "Lampurger", "Latvian Blue", 
+    "Latvian Brown", "Levantina", "Lidia", "Limia", "Limousin", "Limpurger", "Lincoln", 
+    "Lincoln Red", "Lineback", "Lithuanian Black-and-White", "Lithuanian Red", "Lohani", 
+    "Lombard", "Longhorn", "Lourdaise", "Lucerna", "Luing", "Madura", "Maine-Anjou", "Mambí", 
+    "Mandalong Special", "Mantequera Leonesa", "Maramure Brown", "Marchigiana", "Maremmana", 
+    "Maringa", "Maronesa", "Masai", "Mashona", "Menorquina", "Mertolenga", "Mestiza", 
+    "Meuse-Rhine-Issel", "Minhota", "Miniature", "Mirandesa", "Modenese", "Modicana", 
+    "Monchina", "Mongolian", "Montbéliarde", "Mucca Pisana", "Murboden", "Murnau-Werdenfels", 
+    "Murray Grey", "Mursi", "N'Dama", "Nelore", "Nelore Pintado", "Nguni", "Normande", 
+    "Normando", "Northern Finncattle", "Northern Shorthorn", "Norwegian Red", "Pajuna", 
+    "Palmera", "Pantaneiro", "Parda Alpina", "Pardo Suizo", "Parthenaise", "Pasiega", 
+    "Pasturina", "Pembroke", "Pezzata Rossa D'Oropa", "Philippine", "Physical Characteristics", 
+    "Pie Rouge des Plaines", "Piemontese", "Pineywoods", "Pinzgauer", "Pirenaica", "Podolica", 
+    "Polish Black-and-White", "Polish Red", "Polled Hereford", "Ponwar", "Preta", 
+    "Punganur Dwarf", "Pustertaler", "Qinchuan", "Queensland Miniature Boran", "Ramo Grande", 
+    "Randall Lineback", "Red Angus", "Red Brahman", "Red Brangus", "Red Fulani", "Red Pied", 
+    "Red Poll", "Red Polled Ostland", "Red Steppe", "Reina", "Rendena", "Retinta", "Reyna", 
+    "Rojo Sueco", "Romagnola", "Romanian Balata", "Romanian Steppe Gray", "Rombrah", 
+    "Romosinuano", "Rubia de Aquitania", "Rubia Gallega", "Russian Black Pied", "RX3", 
+    "Rätisches Grauvieh", "Sahiwal", "Salers", "Salorn", "Sanga", "Sanhe", "Santa Cruz", 
+    "Santa Gertrudis", "Sarda", "Sardo Bruna", "Sardo-modicana", "Savoiarda", "Sayaguesa", 
+    "Schwyz", "Selembu", "Senepol", "Sheko", "Shetland", "Shorthorn", "Siboney", "Sided Tronder", 
+    "Simbrah", "Simbrasil", "Simford", "Simmental", "Sindhi", "Smada", "South Devon", 
+    "Speckle Park", "Square Meater", "Suizbu", "Sussex", "Swedish Red-and-White", "Tropicame", 
+    "Wagyu", "Wangus", "Watusi", "Welsh Black", "Western Finncattle", "Western Fjord", 
+    "White Caceres", "White Fulani", "White Park", "Whitebred Shorthorn", "Xingjiang Brown", 
+    "Yanbian", "Zebu"
 ]
 
 LISTA_PROPOSITOS = ["Carne", "Leche", "Doble Propósito", "Cría / Genética", "Deporte / Trabajo", "Mascota"]
 
-# Listas Veterinarias
 TIPOS_TRATAMIENTO = [
     "Desparacitación", "Secado", "Tratamiento de fertilidad", "Castración",
     "Tratamiento de mastitis", "Endo-ectoparasiticida", "Endoparasiticida",
@@ -81,166 +141,46 @@ CAUSAS_MUERTE = [
     "Infección", "Enfermedad", "Envenenamiento", "Desaparecida", "Otro"
 ]
 
-# Listas Reproducción
 TIPOS_FECUNDACION = ["Monta", "Inseminación artificial", "Transferencia de embriones", "Otros"]
 
 # --- ESTILOS CSS ---
 st.markdown("""
 <style>
     /* Estilo General Botones */
-    div.stButton > button {
-        width: 100%;
-        height: 50px;
-        font-size: 16px;
-        border-radius: 12px;
-        border: 1px solid #e0e0e0;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
-    }
-    
-    /* Botones Principales (Rojos y Ovalados para móviles) */
-    div.stButton > button[kind="primary"] {
-        background-color: #e53935 !important;
-        color: white !important;
-        border-radius: 25px !important;
-        font-weight: bold !important;
-        border: none !important;
-    }
-    div.stButton > button[kind="primary"]:hover {
-        background-color: #c62828 !important;
-    }
+    div.stButton > button { width: 100%; height: 50px; font-size: 16px; border-radius: 12px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
+    div.stButton > button[kind="primary"] { background-color: #e53935 !important; color: white !important; border-radius: 25px !important; font-weight: bold !important; border: none !important; }
+    div.stButton > button[kind="primary"]:hover { background-color: #c62828 !important; }
 
-    /* Header Estilo App para Registro Completo */
-    .app-header {
-        background-color: #4CAF50;
-        color: white;
-        padding: 10px 15px;
-        font-weight: bold;
-        border-radius: 5px;
-        margin-bottom: 15px;
-        font-size: 16px;
-    }
+    /* Headers y Secciones */
+    .app-header { background-color: #4CAF50; color: white; padding: 10px 15px; font-weight: bold; border-radius: 5px; margin-bottom: 15px; font-size: 16px; }
+    .seccion-titulo { background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-top: 10px; margin-bottom: 10px; font-weight: bold; color: #31333F; }
+    
+    /* Tablas y Tarjetas */
+    .tabla-header { background-color: #2e7d32; color: white; padding: 8px; border-radius: 8px 8px 0 0; font-weight: bold; font-size: 14px; display: flex; justify-content: space-between; }
+    .tabla-row { background-color: white; padding: 10px; border-bottom: 1px solid #eee; border-left: 1px solid #eee; border-right: 1px solid #eee; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .vet-card { background-color: white; border-left: 5px solid #2e7d32; padding: 10px; margin-bottom: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .repro-card { background-color: white; border-left: 5px solid #1565c0; padding: 10px; margin-bottom: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .empty-state { text-align: center; padding: 20px; color: #666; }
+    
+    /* Módulo Finanzas (Tarjetas de Cuentas) */
+    .cuenta-card { background-color: #f8f9fa; border-left: 5px solid #1976d2; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; }
+    .cuenta-title { font-size: 14px; color: #555; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; }
+    .cuenta-saldo { font-size: 26px; font-weight: bold; color: #2e7d32; margin: 0; }
+    .cuenta-moneda { font-size: 14px; color: #777; font-weight: normal; }
+    
+    /* Módulo Finanzas (Historial / Libro Mayor) */
+    .fin-row { background-color: white; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.02); margin-bottom: 10px; display: flex; align-items: center; }
+    .fin-icon { font-size: 24px; margin-right: 15px; width: 40px; text-align: center; background-color: #f0f2f6; padding: 10px; border-radius: 50%; }
+    .fin-details { flex-grow: 1; }
+    .fin-title { font-weight: bold; color: #333; font-size: 15px; margin-bottom: 3px; display: flex; justify-content: space-between;}
+    .fin-subtitle { color: #666; font-size: 13px; margin-bottom: 3px; }
+    .fin-notas { color: #999; font-size: 11px; font-style: italic; }
+    .fin-date { font-size: 12px; color: #888; text-align: right; min-width: 80px; }
+    .fin-pos { border-left: 5px solid #2e7d32; } /* Verde Ingreso */
+    .fin-neg { border-left: 5px solid #d32f2f; } /* Rojo Egreso */
+    .fin-neu { border-left: 5px solid #1976d2; } /* Azul Neutro */
 
-    .seccion-titulo {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 5px;
-        margin-top: 10px;
-        margin-bottom: 10px;
-        font-weight: bold;
-        color: #31333F;
-    }
-    
-    /* Estilo Tablas */
-    .tabla-header {
-        background-color: #2e7d32;
-        color: white;
-        padding: 8px;
-        border-radius: 8px 8px 0 0;
-        font-weight: bold;
-        font-size: 14px;
-        display: flex;
-        justify-content: space-between;
-    }
-    .tabla-row {
-        background-color: white;
-        padding: 10px;
-        border-bottom: 1px solid #eee;
-        border-left: 1px solid #eee;
-        border-right: 1px solid #eee;
-        font-size: 14px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    
-    /* Tarjetas Historial */
-    .vet-card {
-        background-color: white;
-        border-left: 5px solid #2e7d32;
-        padding: 10px;
-        margin-bottom: 10px;
-        border-radius: 5px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    
-    .repro-card {
-        background-color: white;
-        border-left: 5px solid #1565c0; /* Azul para repro */
-        padding: 10px;
-        margin-bottom: 10px;
-        border-radius: 5px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    
-    /* Texto centrado para el estado vacío */
-    .empty-state {
-        text-align: center;
-        padding: 20px;
-        color: #666;
-    }
-    
-    /* Estilo Ubre Mastitis */
-    .ubre-box {
-        background-color: #ef9a9a; 
-        border-radius: 20px;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 15px;
-        width: 100%;
-        height: 100%;
-        box-shadow: inset 0 0 10px rgba(0,0,0,0.1);
-    }
-    .ubre-row {
-        display: flex;
-        gap: 30px;
-        font-weight: bold;
-        color: white;
-        font-size: 20px;
-    }
-    .ubre-num {
-        background-color: rgba(255,255,255,0.3);
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    
-    /* Header Reproductivo (Estadísticas) */
-    .repro-stats {
-        background-color: #2e7d32;
-        color: white;
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-    }
-    .repro-stats h3 { margin: 0; color: white; font-size: 18px; }
-    .repro-stats p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
-    .stat-row { display: flex; justify-content: space-between; margin-top: 5px; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 5px; }
-
-    /* Estilo Toggle Macho/Hembra Personalizado */
-    div[role="radiogroup"] {
-        display: flex;
-        justify-content: center;
-        gap: 20px;
-    }
-    
-    /* Botones Cuadrados Sanidad */
-    .btn-cuadrado {
-        height: 120px !important;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px !important;
-        font-weight: bold;
-    }
-
-    /* --- ESTILOS DASHBOARD --- */
+    /* Dashboard & Alertas */
     .dash-card { background-color: white; border-radius: 10px; padding: 15px; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; }
     .grid-2-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
     .metric-card { background-color: white; border-radius: 10px; padding: 15px; display: flex; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; }
@@ -248,92 +188,87 @@ st.markdown("""
     .metric-info { flex-grow: 1; text-align: right; }
     .metric-title { font-size: 12px; color: #777; margin-bottom: 5px; text-transform: uppercase; }
     .metric-value { font-size: 22px; font-weight: bold; margin: 0; color: #333; }
-    
-    /* --- NUEVOS ESTILOS PARA ALERTAS --- */
-    .alerta-card {
-        background-color: white;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        border-left: 5px solid #9e9e9e;
-        display: flex;
-        align-items: center;
-    }
-    .alerta-icon {
-        font-size: 30px;
-        margin-right: 15px;
-    }
-    .alerta-content {
-        flex-grow: 1;
-    }
-    .alerta-title {
-        font-weight: bold;
-        font-size: 16px;
-        margin-bottom: 4px;
-        color: #333;
-    }
-    .alerta-desc {
-        color: #666;
-        font-size: 14px;
-        margin: 0;
-    }
-    .alerta-animal {
-        font-weight: bold;
-        color: #1565c0;
-    }
+    .alerta-card { background-color: white; padding: 15px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-left: 5px solid #9e9e9e; display: flex; align-items: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXIÓN GOOGLE SHEETS (CON CACHÉ DE RECURSOS) ---
+# --- CONEXIÓN GOOGLE SHEETS ---
 @st.cache_resource
 def conectar_sheets():
-    creds = obtener_credenciales()
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = None
+    if os.path.exists("credentials.json"):
+        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    elif "gcp_service_account" in st.secrets:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        
     if not creds:
         st.error("❌ No se encontraron credenciales.")
         return None
     try:
         client = gspread.authorize(creds)
-        # ID DE TU HOJA DE CALCULO
         sheet_id = "1292mc53ss8G8pY-azGsrpq10OR8RDX0gNMVML8LgfU0" 
-        return client.open_by_key(sheet_id)
+        sh = client.open_by_key(sheet_id)
+        
+        try:
+            sh.worksheet("Cuentas")
+        except gspread.exceptions.WorksheetNotFound:
+            ws_cuentas = sh.add_worksheet(title="Cuentas", rows="100", cols="5")
+            ws_cuentas.append_row(["ID", "Nombre", "Moneda", "Saldo"])
+            
+        return sh
     except Exception as e:
         st.error(f"⚠️ Error conectando con Google Sheets: {e}")
         return None
 
-def obtener_credenciales():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    if os.path.exists("credentials.json"):
-        return Credentials.from_service_account_file("credentials.json", scopes=scopes)
-    elif "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        return Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    else:
-        return None
-
-# --- CARGA DE DATOS (CON CACHÉ DE DATOS ULTRARRÁPIDO) ---
-@st.cache_data(ttl=600) # El caché dura 10 minutos automáticamente o hasta que lo limpiemos
+# --- CARGA DE DATOS (AHORA BLINDADA) ---
+@st.cache_data(ttl=600) 
 def cargar_datos():
     sh = conectar_sheets()
     if not sh:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
+    # Función auxiliar para leer hojas y evitar el error de las columnas vacías ("")
+    def leer_hoja_segura(worksheet):
+        datos = worksheet.get_all_values()
+        if not datos or len(datos) < 2:
+            return pd.DataFrame()
+        
+        encabezados = [str(x).strip() for x in datos[0]]
+        df = pd.DataFrame(datos[1:], columns=encabezados)
+        
+        # Eliminar cualquier columna que no tenga título (esto soluciona tu error de duplicates: [''])
+        if "" in df.columns:
+            df = df.drop(columns=[""])
+            
+        return df
+
     try:
         hoja_animales = sh.get_worksheet(0)
-        df = pd.DataFrame(hoja_animales.get_all_records())
+        df = leer_hoja_segura(hoja_animales)
         if not df.empty:
             df.columns = df.columns.astype(str).str.strip()
             df["ID"] = df["ID"].astype(str)
-    except:
+    except Exception as e:
+        st.error(f"🚨 Error leyendo la pestaña de Animales: {e}")
         df = pd.DataFrame()
 
     try:
         hoja_historial = sh.worksheet("Historial")
-        df_hist = pd.DataFrame(hoja_historial.get_all_records())
-    except:
+        df_hist = leer_hoja_segura(hoja_historial)
+    except Exception as e:
+        st.error(f"🚨 Error leyendo el Historial: {e}")
         df_hist = pd.DataFrame()
         
-    return df, df_hist
+    try:
+        hoja_cuentas = sh.worksheet("Cuentas")
+        df_cuentas = leer_hoja_segura(hoja_cuentas)
+    except Exception as e:
+        st.error(f"🚨 Error leyendo las Cuentas: {e}")
+        df_cuentas = pd.DataFrame()
+        
+    return df, df_hist, df_cuentas
 
 # --- FUNCIÓN: SUBIR A IMGBB ---
 def subir_foto_imgbb(archivo):
@@ -366,10 +301,10 @@ def calcular_edad(fecha_nac_str):
     except:
         return "--"
 
-# --- CRUD BASE DE DATOS (AHORA LIMPIANDO CACHÉ AL GUARDAR) ---
+# --- CRUD BASE DE DATOS ---
 def guardar_animal(sheet, datos, rerun=True):
     sheet.append_row(datos)
-    cargar_datos.clear() # Limpia la RAM para que se refleje el nuevo dato de inmediato
+    cargar_datos.clear() 
     st.toast("✅ Animal registrado")
     if rerun:
         st.balloons()
@@ -381,10 +316,14 @@ def guardar_evento(sh, datos, tipo_evento):
         worksheet = sh.worksheet("Historial")
     except:
         worksheet = sh.add_worksheet(title="Historial", rows="1000", cols="10")
-        worksheet.append_row(["Fecha", "Tipo Evento", "ID Animal", "Detalle 1", "Detalle 2", "Notas"])
+        worksheet.append_row(["Fecha", "Tipo Evento", "ID Animal", "Detalle 1", "Detalle 2", "Notas", "ID Evento"])
     
+    if len(datos) == 6:
+        id_evento = str(uuid.uuid4())[:8]
+        datos.append(id_evento)
+        
     worksheet.append_row(datos)
-    cargar_datos.clear() # Limpia la RAM
+    cargar_datos.clear()
     st.toast(f"✅ {tipo_evento} guardado")
 
 def encontrar_fila_por_id(sheet, id_animal):
@@ -399,7 +338,7 @@ def actualizar_animal_completo(sheet, id_animal, nuevos_datos):
     if fila:
         rango = f"A{fila}:J{fila}"
         sheet.update(rango, [nuevos_datos])
-        cargar_datos.clear() # Limpia la RAM
+        cargar_datos.clear() 
         st.success("✅ Datos actualizados correctamente")
         time.sleep(1)
         st.rerun()
@@ -408,13 +347,13 @@ def cambiar_estado_animal(sheet, id_animal, nuevo_estado):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.update_cell(fila, 9, nuevo_estado)
-        cargar_datos.clear() # Limpia la RAM
+        cargar_datos.clear() 
 
 def eliminar_animal_db(sheet, id_animal):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.delete_rows(fila)
-        cargar_datos.clear() # Limpia la RAM
+        cargar_datos.clear() 
         st.warning("🗑️ Animal eliminado")
         time.sleep(1)
         st.rerun()
@@ -423,67 +362,135 @@ def cambiar_estado_vendido(sheet, id_animal):
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.update_cell(fila, 9, "VENDIDO") 
-        cargar_datos.clear() # Limpia la RAM
+        cargar_datos.clear() 
+
+# --- FUNCIONES FINANZAS ---
+def crear_cuenta(sh, nombre, moneda, saldo_inicial):
+    hoja = sh.worksheet("Cuentas")
+    nuevo_id = str(len(hoja.get_all_values())) 
+    hoja.append_row([nuevo_id, nombre, moneda, str(saldo_inicial)])
+    cargar_datos.clear()
+    st.success(f"✅ Cuenta '{nombre}' creada exitosamente.")
+
+def actualizar_saldo_cuenta(sh, nombre_cuenta, variacion_monto):
+    hoja = sh.worksheet("Cuentas")
+    nombres = hoja.col_values(2) 
+    if nombre_cuenta in nombres:
+        fila = nombres.index(nombre_cuenta) + 1
+        saldo_actual = float(str(hoja.cell(fila, 4).value).replace(",", "")) 
+        nuevo_saldo = saldo_actual + float(variacion_monto)
+        hoja.update_cell(fila, 4, str(nuevo_saldo))
+        cargar_datos.clear()
+
+def eliminar_evento_finanzas_por_id(sh, id_evento):
+    hoja = sh.worksheet("Historial")
+    registros = hoja.get_all_values()
+    fila_a_borrar = None
+    fila_datos = None
+    
+    for i, fila in enumerate(registros):
+        if len(fila) > 6 and str(fila[6]).strip() == str(id_evento).strip():
+            fila_a_borrar = i + 1
+            fila_datos = fila
+            break
+            
+    if fila_a_borrar:
+        tipo = fila_datos[1]
+        det1 = str(fila_datos[3])
+        det2 = str(fila_datos[4])
+        notas = str(fila_datos[5])
+        
+        monto_reversion = 0.0
+        cuenta_reversion = ""
+        
+        try:
+            if tipo == "VENTA":
+                monto_reversion = float(det1.split()[0])
+                if "Ingresa a:" in notas: cuenta_reversion = notas.split("Ingresa a:")[1].split("|")[0].strip()
+            elif tipo == "COMPRA":
+                if "Monto Total:" in notas: monto_reversion = float(notas.split("Monto Total:")[1].split("|")[0].strip())
+                if "Pagado desde:" in notas: cuenta_reversion = notas.split("Pagado desde:")[1].split("|")[0].strip()
+            elif tipo == "APORTE_CAPITAL":
+                cuenta_reversion = det1.replace("Cuenta:", "").strip()
+                monto_reversion = float(det2.replace("Monto:", "").strip())
+            elif tipo == "GASTO_OPERATIVO" or tipo == "INGRESO_OPERATIVO":
+                monto_reversion = float(det1.split("Monto:")[1].split("(Cuenta:")[0].strip())
+                cuenta_reversion = det1.split("(Cuenta:")[1].replace(")", "").strip()
+        except Exception as e:
+            st.error(f"No se pudo detectar el monto exacto para revertir la caja. Borrado manual sugerido en Google Sheets.")
+            return False
+            
+        if cuenta_reversion and monto_reversion > 0:
+            if tipo in ["GASTO_OPERATIVO", "COMPRA"]:
+                actualizar_saldo_cuenta(sh, cuenta_reversion, monto_reversion) 
+            elif tipo in ["VENTA", "APORTE_CAPITAL", "INGRESO_OPERATIVO"]:
+                actualizar_saldo_cuenta(sh, cuenta_reversion, -monto_reversion) 
+
+        hoja.delete_rows(fila_a_borrar)
+        cargar_datos.clear()
+        st.toast("✅ Registro eliminado y dinero devuelto a la cuenta correctamente.")
+        return True
+    else:
+        st.error("❌ ID no encontrado. Verifica que lo escribiste correctamente.")
+        return False
+
+def reparar_ids_historial(sh):
+    """Función de auto-sanación que asigna UUIDs a transacciones viejas sin ID"""
+    try:
+        hoja = sh.worksheet("Historial")
+        registros = hoja.get_all_values()
+        if not registros: return 0
+        
+        header = registros[0]
+        if len(header) < 7:
+            hoja.update_cell(1, 7, "ID Evento")
+        elif header[6].strip() == "":
+            hoja.update_cell(1, 7, "ID Evento")
+        
+        lista_updates = []
+        for i, fila in enumerate(registros):
+            if i == 0: continue
+            if len(fila) < 7 or str(fila[6]).strip() == "":
+                nuevo_id = str(uuid.uuid4())[:8]
+                lista_updates.append({'range': f'G{i+1}', 'values': [[nuevo_id]]})
+        
+        if lista_updates:
+            hoja.batch_update(lista_updates)
+            cargar_datos.clear()
+        return len(lista_updates)
+    except Exception as e:
+        st.error(f"Error reparando IDs: {e}")
+        return 0
 
 # --- GESTIÓN DE ESTADO (NAVEGACIÓN) ---
-if 'nav_gestion' not in st.session_state:
-    st.session_state.nav_gestion = 'lista' 
-if 'animal_seleccionado' not in st.session_state:
-    st.session_state.animal_seleccionado = None
-if 'accion_activa' not in st.session_state:
-    st.session_state.accion_activa = None
-if 'sub_accion_produccion' not in st.session_state:
-    st.session_state.sub_accion_produccion = None
-if 'sub_accion_veterinaria' not in st.session_state:
-    st.session_state.sub_accion_veterinaria = None
-if 'sub_accion_reproduccion' not in st.session_state:
-    st.session_state.sub_accion_reproduccion = None
-if 'registro_expandido' not in st.session_state:
-    st.session_state.registro_expandido = False
-if 'sub_accion_sanidad_rapida' not in st.session_state:
-    st.session_state.sub_accion_sanidad_rapida = None
+if 'nav_gestion' not in st.session_state: st.session_state.nav_gestion = 'lista' 
+if 'animal_seleccionado' not in st.session_state: st.session_state.animal_seleccionado = None
+if 'accion_activa' not in st.session_state: st.session_state.accion_activa = None
+if 'sub_accion_produccion' not in st.session_state: st.session_state.sub_accion_produccion = None
+if 'sub_accion_veterinaria' not in st.session_state: st.session_state.sub_accion_veterinaria = None
+if 'sub_accion_reproduccion' not in st.session_state: st.session_state.sub_accion_reproduccion = None
+if 'registro_expandido' not in st.session_state: st.session_state.registro_expandido = False
+if 'sub_accion_sanidad_rapida' not in st.session_state: st.session_state.sub_accion_sanidad_rapida = None
 
-def ir_a_lista():
-    st.session_state.nav_gestion = 'lista'
-    st.session_state.animal_seleccionado = None
+def ir_a_lista(): st.session_state.nav_gestion = 'lista'; st.session_state.animal_seleccionado = None
+def ir_a_perfil(animal_id): st.session_state.animal_seleccionado = animal_id; st.session_state.nav_gestion = 'perfil'
+def ir_a_detalle(): st.session_state.nav_gestion = 'detalle'
+def ir_a_produccion(): st.session_state.nav_gestion = 'produccion'; st.session_state.sub_accion_produccion = None
+def ir_a_veterinaria(): st.session_state.nav_gestion = 'veterinaria'; st.session_state.sub_accion_veterinaria = None
+def ir_a_reproduccion(): st.session_state.nav_gestion = 'reproduccion'; st.session_state.sub_accion_reproduccion = None
+def set_accion(nombre_accion): st.session_state.accion_activa = nombre_accion; st.session_state.sub_accion_sanidad_rapida = None 
+def toggle_registro_mode(): st.session_state.registro_expandido = not st.session_state.registro_expandido
 
-def ir_a_perfil(animal_id):
-    st.session_state.animal_seleccionado = animal_id
-    st.session_state.nav_gestion = 'perfil'
-
-def ir_a_detalle():
-    st.session_state.nav_gestion = 'detalle'
-
-def ir_a_produccion():
-    st.session_state.nav_gestion = 'produccion'
-    st.session_state.sub_accion_produccion = None
-
-def ir_a_veterinaria():
-    st.session_state.nav_gestion = 'veterinaria'
-    st.session_state.sub_accion_veterinaria = None
-
-def ir_a_reproduccion():
-    st.session_state.nav_gestion = 'reproduccion'
-    st.session_state.sub_accion_reproduccion = None
-
-def set_accion(nombre_accion):
-    st.session_state.accion_activa = nombre_accion
-    st.session_state.sub_accion_sanidad_rapida = None # Resetea la sanidad masiva al cambiar de opción
-
-def toggle_registro_mode():
-    st.session_state.registro_expandido = not st.session_state.registro_expandido
 
 # --- APP PRINCIPAL ---
 def main():
     st.title("🧬 Control Ganadero")
 
-    # Obtenemos la conexión de la caché
     sh = conectar_sheets()
     
     if sh:
         hoja_animales = sh.get_worksheet(0)
-        # Obtenemos los dataframes de la caché ultrarrápida
-        df, df_hist = cargar_datos()
+        df, df_hist, df_cuentas = cargar_datos()
         
         if not df.empty:
             df_activos = df[df["Estado"] != "VENDIDO"]
@@ -495,16 +502,14 @@ def main():
             lista_ids_todos = []
 
         # --- PESTAÑAS (TABS) ---
-        tab_dash, tab_reg, tab_gest, tab_acc, tab_ventas, tab_alertas, tab_reportes = st.tabs([
-            "📊 DASHBOARD", "📝 REGISTRO", "📱 GESTIÓN", "⚡ RÁPIDO", "💰 VENTAS", "🔔 ALERTAS", "📑 REPORTES"
+        tab_dash, tab_reg, tab_gest, tab_acc, tab_finanzas, tab_alertas, tab_reportes = st.tabs([
+            "📊 DASHBOARD", "📝 REGISTRO", "📱 GESTIÓN", "⚡ RÁPIDO", "🏦 FINANZAS", "🔔 ALERTAS", "📑 REPORTES"
         ])
 
         # ==========================================
-        # 1. DASHBOARD (NUEVO DISEÑO APP MÓVIL)
+        # 1. DASHBOARD
         # ==========================================
         with tab_dash:
-            
-            # --- Cabecera de la Finca ---
             st.markdown("""
             <div style="background-color: #4CAF50; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; position: relative;">
                 <h2 style="margin: 0; font-size: 24px; color: white;">Finca ⚠️</h2>
@@ -540,60 +545,40 @@ def main():
             st.markdown("---")
 
             if not df_activos.empty:
-                # --- CÁLCULOS DINÁMICOS ---
                 machos = len(df_activos[df_activos["Sexo"] == "Macho"])
                 hembras = len(df_activos[df_activos["Sexo"] == "Hembra"])
-
-                # Crias vs Adultos (Identificamos crías por la categoría 'Becerro')
                 crias = len(df_activos[df_activos["Tipo"] == "Becerro"])
                 adultos = len(df_activos) - crias
+                try: peso_total = df_activos["Peso"].astype(float).sum()
+                except: peso_total = 0.0
 
-                # Peso total (Carne)
-                try:
-                    peso_total = df_activos["Peso"].astype(float).sum()
-                except:
-                    peso_total = 0.0
-
-                # ---> NUEVO: CÁLCULO DE GANANCIA MEDIA DIARIA (GMD) EN GRAMOS <---
                 ganancias_diarias = []
                 for _, row in df_activos.iterrows():
                     try:
                         peso_actual = float(row["Peso"]) if pd.notnull(row["Peso"]) and str(row["Peso"]).strip() != "" else 0.0
-                        peso_nac = 35.0 # Estimación estándar de becerro al nacer si no hay registro
-                        
-                        # Si en el futuro usamos el registro extendido que guarda PesoNac:
+                        peso_nac = 35.0 
                         if "PesoNac" in df_activos.columns and pd.notnull(row["PesoNac"]) and str(row["PesoNac"]).strip() != "":
                             peso_nac = float(row["PesoNac"])
-                            
                         fecha_nac = pd.to_datetime(row["Nacimiento"], errors='coerce')
                         if pd.notnull(fecha_nac):
                             dias_vida = (pd.Timestamp(date.today()) - fecha_nac).days
                             if dias_vida > 0 and peso_actual > peso_nac:
-                                gmd = ((peso_actual - peso_nac) / dias_vida) * 1000 # Convertido a gramos
+                                gmd = ((peso_actual - peso_nac) / dias_vida) * 1000 
                                 ganancias_diarias.append(gmd)
-                    except:
-                        pass
+                    except: pass
                 
-                # Promedio de todas las ganancias medias calculadas
                 ganancia_promedio_g = sum(ganancias_diarias) / len(ganancias_diarias) if ganancias_diarias else 0.0
-
-                # Leche total (Sumando el historial de leche)
                 leche_total = 0.0
                 if not df_hist.empty and "Tipo Evento" in df_hist.columns:
                     df_leche = df_hist[df_hist["Tipo Evento"] == "PRODUCCION_LECHE"]
                     if not df_leche.empty:
-                        try:
-                            leche_total = df_leche["Detalle 1"].astype(float).sum()
-                        except:
-                            pass
+                        try: leche_total = df_leche["Detalle 1"].astype(float).sum()
+                        except: pass
 
-                # Animales productivos (Vacas en producción)
                 vacas = len(df_activos[df_activos["Tipo"] == "Vaca"])
 
-                # --- GRÁFICA INVENTARIO ---
                 st.markdown('<div class="dash-card"><h4 style="margin-top:0;">Inventario de animales</h4>', unsafe_allow_html=True)
                 df_pie = pd.DataFrame({"Categoría": ["Crías", "Adultos"], "Cantidad": [crias, adultos]})
-                # Colores idénticos a tu captura: verde (Adultos), morado (Crías)
                 domain = ["Crías", "Adultos"]
                 range_ = ["#9c27b0", "#388e3c"] 
                 
@@ -605,52 +590,14 @@ def main():
                 st.altair_chart(pie, use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-                # --- GRID DE MÉTRICAS (Igual a la App) ---
                 st.markdown(f"""
                 <div class="grid-2-col">
-                    <div class="metric-card">
-                        <div class="metric-icon" style="color: #29b6f6;">♂️</div>
-                        <div class="metric-info">
-                            <div class="metric-title">Machos</div>
-                            <div class="metric-value">{machos}</div>
-                        </div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon" style="color: #ab47bc;">♀️</div>
-                        <div class="metric-info">
-                            <div class="metric-title">Hembras</div>
-                            <div class="metric-value">{hembras}</div>
-                        </div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🥩</div>
-                        <div class="metric-info">
-                            <div class="metric-title" style="text-transform: none;">Promedio de ganancia de peso</div>
-                            <div class="metric-value">{ganancia_promedio_g:.1f} g</div>
-                        </div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🥩</div>
-                        <div class="metric-info">
-                            <div class="metric-title" style="text-transform: none;">Total de carne</div>
-                            <div class="metric-value">{peso_total:.1f} kg</div>
-                        </div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🥛</div>
-                        <div class="metric-info">
-                            <div class="metric-title" style="text-transform: none;">Producción total de leche</div>
-                            <div class="metric-value">{leche_total:.1f} L</div>
-                            <div style="font-size: 10px; color: #d32f2f;">-100.0% Mes pas...</div>
-                        </div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🐄</div>
-                        <div class="metric-info">
-                            <div class="metric-title" style="text-transform: none;">Animales productivos</div>
-                            <div class="metric-value">{vacas}</div>
-                        </div>
-                    </div>
+                    <div class="metric-card"><div class="metric-icon" style="color: #29b6f6;">♂️</div><div class="metric-info"><div class="metric-title">Machos</div><div class="metric-value">{machos}</div></div></div>
+                    <div class="metric-card"><div class="metric-icon" style="color: #ab47bc;">♀️</div><div class="metric-info"><div class="metric-title">Hembras</div><div class="metric-value">{hembras}</div></div></div>
+                    <div class="metric-card"><div class="metric-icon">🥩</div><div class="metric-info"><div class="metric-title" style="text-transform: none;">Promedio de ganancia de peso</div><div class="metric-value">{ganancia_promedio_g:.1f} g</div></div></div>
+                    <div class="metric-card"><div class="metric-icon">🥩</div><div class="metric-info"><div class="metric-title" style="text-transform: none;">Total de carne</div><div class="metric-value">{peso_total:.1f} kg</div></div></div>
+                    <div class="metric-card"><div class="metric-icon">🥛</div><div class="metric-info"><div class="metric-title" style="text-transform: none;">Producción total de leche</div><div class="metric-value">{leche_total:.1f} L</div><div style="font-size: 10px; color: #d32f2f;">-100.0% Mes pas...</div></div></div>
+                    <div class="metric-card"><div class="metric-icon">🐄</div><div class="metric-info"><div class="metric-title" style="text-transform: none;">Animales productivos</div><div class="metric-value">{vacas}</div></div></div>
                 </div>
                 <div style="text-align: center; color: #888; font-size: 12px; margin-top: 20px; padding-bottom: 20px;">
                     La información de este panel se actualiza de forma automática en cada registro.
@@ -660,11 +607,9 @@ def main():
                 st.info("👋 Registra animales para ver el tablero de la finca.")
 
         # ==========================================
-        # 2. REGISTRO (MODO DUAL: RÁPIDO Y COMPLETO)
+        # 2. REGISTRO 
         # ==========================================
         with tab_reg:
-            
-            # --- MODO RÁPIDO (Original) ---
             if not st.session_state.registro_expandido:
                 st.info("Ficha de Ingreso Rápido")
                 with st.form("ficha_registro_rapido", clear_on_submit=True):
@@ -675,7 +620,7 @@ def main():
                     with c4: sexo_new = st.radio("Sexo", ["Hembra", "Macho"], horizontal=True)
                     
                     c5, c6, c7 = st.columns(3)
-                    with c5: raza_new = st.selectbox("Raza", ["Brahman", "Gyr", "Holstein", "Mestizo", "Senepol", "Otro"])
+                    with c5: raza_new = st.selectbox("Raza *", LISTA_RAZAS_GLOBAL, index=None, placeholder="🔍 Escribe para buscar...")
                     with c6: tipo_new = st.selectbox("Categoría", ["Vaca", "Toro", "Novilla", "Becerro"])
                     with c7: estado_new = st.selectbox("Estado", ["Sano", "Enfermo", "Preñada"])
 
@@ -685,28 +630,24 @@ def main():
                     with c10: foto_new = st.file_uploader("Foto")
 
                     if st.form_submit_button("💾 GUARDAR RÁPIDO", type="primary"):
-                        if not id_new:
-                            st.error("El ID es obligatorio")
-                        elif id_new in lista_ids_todos:
-                            st.error("ID Repetido")
+                        if not id_new: st.error("El ID es obligatorio")
+                        elif not raza_new: st.error("Selecciona una raza usando el buscador")
+                        elif id_new in lista_ids_todos: st.error("ID Repetido")
                         else:
                             link = "Sin Foto"
                             if foto_new:
                                 with st.spinner("Subiendo foto..."):
                                     link = subir_foto_imgbb(foto_new)
                             
-                            # Estructura básica
                             datos = [id_new, tipo_new, nom_new, arete_new, raza_new, sexo_new, str(peso_new), str(nac_new), estado_new, link]
                             guardar_animal(hoja_animales, datos)
 
                 st.write("")
                 st.markdown("---")
-                # Botón para cambiar al modo completo
                 if st.button("✏️ Ampliar datos (Registro Completo)"):
                     toggle_registro_mode()
                     st.rerun()
 
-            # --- MODO COMPLETO (Estilo App Móvil) ---
             else:
                 if st.button("⬅️ Volver a registro rápido"):
                     toggle_registro_mode()
@@ -716,15 +657,12 @@ def main():
 
                 with st.form("ficha_registro_completo", clear_on_submit=True):
                     
-                    # 1. FOTO Y SEXO
                     col_foto, col_sexo = st.columns([1, 1])
-                    with col_foto:
-                        foto_full = st.file_uploader("Foto del animal", type=["jpg", "png", "jpeg"])
+                    with col_foto: foto_full = st.file_uploader("Foto del animal", type=["jpg", "png", "jpeg"])
                     with col_sexo:
                         st.write("Sexo")
                         sexo_full = st.radio("Sexo", ["Macho", "Hembra"], horizontal=True, label_visibility="collapsed")
 
-                    # 2. TIPO E IDENTIFICACIÓN
                     st.markdown('<div class="seccion-titulo">Identificación</div>', unsafe_allow_html=True)
                     tipo_full = st.selectbox("Tipo de animal *", LISTA_ESPECIES)
                     
@@ -736,7 +674,6 @@ def main():
                     with col_id3: num_raza_full = st.text_input("Número de raza pura (Opcional)")
                     with col_id4: num_chip_full = st.text_input("Número de chip (Opcional)")
 
-                    # 3. INFORMACIÓN BÁSICA
                     st.markdown('<div class="seccion-titulo">Información Básica</div>', unsafe_allow_html=True)
                     nombre_full = st.text_input("Nombre del animal")
                     nac_full = st.date_input("Fecha de nacimiento *", date.today())
@@ -745,39 +682,32 @@ def main():
                     with col_bas1: prop_full = st.selectbox("Propietario", ["Principal", "Socio", "Externo"])
                     with col_bas2: lote_full = st.selectbox("Lote", ["General", "Lote 1", "Lote 2", "Enfermería"])
                     
-                    raza_full = st.selectbox("Raza *", LISTA_RAZAS_GLOBAL)
+                    raza_full = st.selectbox("Raza *", LISTA_RAZAS_GLOBAL, index=None, placeholder="🔍 Escribe para buscar la raza...")
                     
-                    # 4. PROPÓSITO Y ESTADO
                     col_prop1, col_prop2 = st.columns(2)
                     with col_prop1: proposito_full = st.selectbox("Propósito Animal", LISTA_PROPOSITOS)
                     with col_prop2: 
                         st.write("¿Está en la finca?")
                         en_finca_full = st.toggle("En Finca", value=True)
 
-                    # 5. PESOS
                     st.markdown('<div class="seccion-titulo">Pesos (kg)</div>', unsafe_allow_html=True)
                     c_peso1, c_peso2, c_peso3 = st.columns(3)
                     with c_peso1: peso_nac = st.number_input("Al nacer", min_value=0.0)
                     with c_peso2: peso_dest = st.number_input("Al destete", min_value=0.0)
                     with c_peso3: peso_12m = st.number_input("12 meses", min_value=0.0)
                     
-                    # Calcular Peso Actual Inicial (Prioridad: 12m > Destete > Nacer)
                     peso_actual_reg = peso_nac
                     if peso_dest > 0: peso_actual_reg = peso_dest
                     if peso_12m > 0: peso_actual_reg = peso_12m
 
-                    # 6. ORIGEN (DINÁMICO - Filtra del inventario)
                     st.markdown('<div class="seccion-titulo">Origen</div>', unsafe_allow_html=True)
                     
                     lista_padres = ["Desconocido"]
                     lista_madres = ["Desconocida"]
                     
                     if not df_activos.empty:
-                        # Filtrar Machos (Toros)
                         machos = df_activos[(df_activos['Sexo'] == 'Macho') | (df_activos['Tipo'] == 'Toro')]
                         if not machos.empty: lista_padres += machos['Nombre'].tolist()
-                        
-                        # Filtrar Hembras (Vacas)
                         hembras = df_activos[(df_activos['Sexo'] == 'Hembra') | (df_activos['Tipo'] == 'Vaca') | (df_activos['Tipo'] == 'Novilla')]
                         if not hembras.empty: lista_madres += hembras['Nombre'].tolist()
 
@@ -785,17 +715,14 @@ def main():
                     with col_orig1: padre_full = st.selectbox("Padre", lista_padres)
                     with col_orig2: madre_full = st.selectbox("Madre", lista_madres)
 
-                    # 7. NOTAS
                     st.markdown('<div class="seccion-titulo">Otros</div>', unsafe_allow_html=True)
                     notas_full = st.text_area("Notas y observaciones")
 
-                    # BOTÓN FINAL
                     st.write("")
                     if st.form_submit_button("REGISTRAR ANIMAL", type="primary"):
-                        if not id_full:
-                            st.error("El Número del animal (ID) es obligatorio.")
-                        elif id_full in lista_ids_todos:
-                            st.error("¡Ese ID ya existe en el sistema!")
+                        if not id_full: st.error("El Número del animal (ID) es obligatorio.")
+                        elif not raza_full: st.error("La raza es obligatoria. Por favor usa el buscador.")
+                        elif id_full in lista_ids_todos: st.error("¡Ese ID ya existe en el sistema!")
                         else:
                             link = "Sin Foto"
                             if foto_full:
@@ -803,34 +730,23 @@ def main():
                                     link = subir_foto_imgbb(foto_full)
                             
                             estado_inicial = "Sano"
-                            
-                            # Lista Extendida de Datos (Se guardará en columnas K, L, M...)
                             datos_extendidos = [
                                 str(id_full), tipo_full, nombre_full, arete_full, raza_full, sexo_full, str(peso_actual_reg), str(nac_full), estado_inicial, link,
                                 proposito_full, str(en_finca_full), padre_full, madre_full, str(peso_nac), str(peso_dest), str(peso_12m), notas_full, prop_full, lote_full, num_chip_full, num_raza_full
                             ]
-                            
                             guardar_animal(hoja_animales, datos_extendidos)
-                            # Aseguramos el estado para el menú de sanidad rápida
+
         if 'sub_accion_sanidad_rapida' not in st.session_state:
             st.session_state.sub_accion_sanidad_rapida = None
 
         # ==========================================
-        # 3. GESTIÓN TIPO APP MÓVIL (TUS IMÁGENES)
+        # 3. GESTIÓN TIPO APP MÓVIL
         # ==========================================
         with tab_gest:
-            
-            # --- VISTA 1: LISTA (AHORA CON FILTROS AVANZADOS) ---
             if st.session_state.nav_gestion == 'lista':
-                
-                # Barra de búsqueda principal
                 busqueda = st.text_input("🔍 Buscar rápido (Nombre, ID o Arete)", placeholder="Ej. Gloria, 1024...")
-                
-                # Panel desplegable de Filtros Avanzados
                 with st.expander("⚙️ Filtros Avanzados de Inventario"):
                     c_f1, c_f2, c_f3 = st.columns(3)
-                    
-                    # Extraer opciones dinámicas de la base de datos (evita errores si hay datos viejos)
                     opciones_tipo = df_activos['Tipo'].dropna().unique().tolist() if 'Tipo' in df_activos.columns else ["Vaca", "Toro", "Novilla", "Becerro"]
                     opciones_estado = df_activos['Estado'].dropna().unique().tolist() if 'Estado' in df_activos.columns else ["Sano", "Enfermo", "Preñada"]
                     opciones_lote = df_activos['Lote'].dropna().unique().tolist() if 'Lote' in df_activos.columns else ["General", "Lote 1", "Lote 2", "Enfermería"]
@@ -838,25 +754,16 @@ def main():
                     with c_f1: f_cat = st.multiselect("Categoría", opciones_tipo)
                     with c_f2: f_est = st.multiselect("Estado Médico/Repro.", opciones_estado)
                     with c_f3: 
-                        if 'Lote' in df_activos.columns:
-                            f_lote = st.multiselect("Ubicación / Lote", opciones_lote)
-                        else:
-                            f_lote = []
-                            st.write("*(Lote no disponible en BD)*")
+                        if 'Lote' in df_activos.columns: f_lote = st.multiselect("Ubicación / Lote", opciones_lote)
+                        else: f_lote = []; st.write("*(Lote no disponible en BD)*")
 
-                # Aplicar lógica de filtrado
                 df_show = df_activos.copy()
                 
-                if busqueda:
-                    df_show = df_show[df_show.apply(lambda row: busqueda.lower() in str(row.values).lower(), axis=1)]
-                if f_cat:
-                    df_show = df_show[df_show['Tipo'].isin(f_cat)]
-                if f_est:
-                    df_show = df_show[df_show['Estado'].isin(f_est)]
-                if f_lote and 'Lote' in df_show.columns:
-                    df_show = df_show[df_show['Lote'].isin(f_lote)]
+                if busqueda: df_show = df_show[df_show.apply(lambda row: busqueda.lower() in str(row.values).lower(), axis=1)]
+                if f_cat: df_show = df_show[df_show['Tipo'].isin(f_cat)]
+                if f_est: df_show = df_show[df_show['Estado'].isin(f_est)]
+                if f_lote and 'Lote' in df_show.columns: df_show = df_show[df_show['Lote'].isin(f_lote)]
 
-                # Contador dinámico
                 st.markdown(f"""
                 <div style="background-color: #e8f5e9; padding: 8px 15px; border-radius: 5px; color: #2e7d32; font-weight: bold; font-size: 14px; margin-bottom: 15px; border-left: 4px solid #4CAF50;">
                     Mostrando {len(df_show)} de {len(df_activos)} animales en la finca
@@ -867,26 +774,21 @@ def main():
                     for index, row in df_show.iterrows():
                         with st.container(border=True):
                             c_img, c_info, c_btn = st.columns([1, 3, 1])
-                            
                             with c_img:
                                 foto_url = str(row.get("Foto", ""))
                                 if "http" in foto_url: st.image(foto_url, use_container_width=True)
                                 else: st.image("https://cdn-icons-png.flaticon.com/512/2173/2173516.png", width=50)
-                            
                             with c_info:
                                 st.subheader(f"{row['Nombre']}")
                                 edad = calcular_edad(row['Nacimiento'])
                                 st.caption(f"ID: {row['ID']} | {row['Raza']} | {edad}")
-                            
                             with c_btn:
                                 st.write("") 
                                 if st.button("👉 Ver", key=f"btn_{row['ID']}"):
                                     ir_a_perfil(row['ID'])
                                     st.rerun()
-                else:
-                    st.info("No se encontraron animales con esos filtros.")
+                else: st.info("No se encontraron animales con esos filtros.")
 
-            # --- VISTA 2: PERFIL ---
             elif st.session_state.nav_gestion == 'perfil':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
@@ -896,8 +798,7 @@ def main():
                     if st.button("⬅️"):
                         ir_a_lista()
                         st.rerun()
-                with col_tit:
-                    st.subheader(f"Perfil: {datos['Nombre']}")
+                with col_tit: st.subheader(f"Perfil: {datos['Nombre']}")
 
                 with st.container(border=True):
                     c_h1, c_h2 = st.columns([1, 2])
@@ -911,32 +812,21 @@ def main():
                         st.write(f"ID: {datos['ID']}")
 
                 st.markdown("---")
-                
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
-                    if st.button("ℹ️ Datos generales", use_container_width=True):
-                        ir_a_detalle()
-                        st.rerun()
+                    if st.button("ℹ️ Datos generales", use_container_width=True): ir_a_detalle(); st.rerun()
                     st.write("")
-                    if st.button("❤️ Datos veterinarios", use_container_width=True):
-                        ir_a_veterinaria()
-                        st.rerun()
-
+                    if st.button("❤️ Datos veterinarios", use_container_width=True): ir_a_veterinaria(); st.rerun()
                 with c_btn2:
-                    if st.button("📊 Producción", use_container_width=True):
-                        ir_a_produccion()
-                        st.rerun()
+                    if st.button("📊 Producción", use_container_width=True): ir_a_produccion(); st.rerun()
                     st.write("")
-                    if st.button("🧬 Reproducción", use_container_width=True):
-                        ir_a_reproduccion()
-                        st.rerun()
+                    if st.button("🧬 Reproducción", use_container_width=True): ir_a_reproduccion(); st.rerun()
 
                 st.markdown("---")
                 if st.button("Poner en venta", type="primary", use_container_width=True):
                     st.session_state.accion_activa = "venta"
                     st.info("✅ Modo Venta Activado. Ve a la pestaña '⚡ RÁPIDO' para completar los datos.")
 
-            # --- VISTA 3: PRODUCCIÓN (CORREGIDA) ---
             elif st.session_state.nav_gestion == 'produccion':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
@@ -947,12 +837,9 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                if st.button("⬅️ Volver al Perfil"):
-                    ir_a_perfil(animal_id)
-                    st.rerun()
+                if st.button("⬅️ Volver al Perfil"): ir_a_perfil(animal_id); st.rerun()
 
                 if st.session_state.sub_accion_produccion is None:
-                    # FILTRAR DATOS
                     df_vaca_hist = pd.DataFrame()
                     if not df_hist.empty:
                         df_hist["ID Animal"] = df_hist["ID Animal"].astype(str)
@@ -1015,7 +902,6 @@ def main():
                         peso_actual = datos['Peso']
                         st.markdown(f"<h3>Evolución de peso: <span style='color:#4CAF50'>Actual {peso_actual} kg</span></h3>", unsafe_allow_html=True)
                         
-                        # Calculamos la ganancia diaria general si hay al menos 2 pesos
                         ganancia_diaria_general = "--"
                         if len(hist_peso) > 1:
                             try:
@@ -1040,7 +926,6 @@ def main():
                         """, unsafe_allow_html=True)
 
                         if not hist_peso.empty:
-                            # Ordenamos cronológicamente para calcular la ganancia entre registros
                             hist_peso = hist_peso.sort_values(by="Fecha", ascending=True).reset_index(drop=True)
                             ganancias = ["--"]
                             for i in range(1, len(hist_peso)):
@@ -1054,7 +939,6 @@ def main():
                                     ganancias.append("--")
                             
                             hist_peso["Ganancia"] = ganancias
-                            # Invertimos para mostrar el más reciente arriba
                             hist_peso_rev = hist_peso.iloc[::-1]
 
                             for i, row in hist_peso_rev.iterrows():
@@ -1068,7 +952,6 @@ def main():
                         else: st.info("Sin registros de peso.")
 
                     st.markdown("<br>", unsafe_allow_html=True)
-                    # Botones apilados al centro como en el diseño móvil
                     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
                     with col_btn2:
                         if st.button("AGREGAR PESO", type="primary", use_container_width=True):
@@ -1097,7 +980,6 @@ def main():
                                 if fp_peso > 0:
                                     datos_peso = [str(fp_fecha), "PESAJE", animal_id, str(fp_peso), fp_alim, fp_notas]
                                     guardar_evento(sh, datos_peso, "Pesaje")
-                                    # Actualizamos el peso actual en la hoja de animales
                                     cambiar_peso_actual = [animal_id, datos["Tipo"], datos["Nombre"], datos["Arete"], datos["Raza"], datos["Sexo"], str(fp_peso), str(datos["Nacimiento"]), datos["Estado"], datos["Foto"]]
                                     actualizar_animal_completo(sh.get_worksheet(0), animal_id, cambiar_peso_actual)
                                     st.session_state.sub_accion_produccion = None
@@ -1137,7 +1019,6 @@ def main():
                                     st.rerun()
                                 else: st.error("Verifica los litros")
 
-            # --- VISTA 5: VETERINARIA ---
             elif st.session_state.nav_gestion == 'veterinaria':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
@@ -1156,24 +1037,16 @@ def main():
                     
                     col_v1, col_v2 = st.columns(2)
                     with col_v1:
-                        if st.button("🩺 Tratamiento", use_container_width=True):
-                            st.session_state.sub_accion_veterinaria = 'tratamiento'
-                            st.rerun()
+                        if st.button("🩺 Tratamiento", use_container_width=True): st.session_state.sub_accion_veterinaria = 'tratamiento'; st.rerun()
                         st.write("")
-                        if st.button("🔴 Mastitis", use_container_width=True): 
-                            st.session_state.sub_accion_veterinaria = 'mastitis'
-                            st.rerun()
+                        if st.button("🔴 Mastitis", use_container_width=True):  st.session_state.sub_accion_veterinaria = 'mastitis'; st.rerun()
                         st.write("")
-                        st.button("🕒 Crear Evento", use_container_width=True) # Sin acción
+                        st.button("🕒 Crear Evento", use_container_width=True) 
                         
                     with col_v2:
-                        if st.button("💉 Vacunación", use_container_width=True):
-                            st.session_state.sub_accion_veterinaria = 'vacuna'
-                            st.rerun()
+                        if st.button("💉 Vacunación", use_container_width=True): st.session_state.sub_accion_veterinaria = 'vacuna'; st.rerun()
                         st.write("")
-                        if st.button("🐮 Muerte", use_container_width=True):
-                            st.session_state.sub_accion_veterinaria = 'muerte'
-                            st.rerun()
+                        if st.button("🐮 Muerte", use_container_width=True): st.session_state.sub_accion_veterinaria = 'muerte'; st.rerun()
 
                     # HISTORIAL VETERINARIO
                     st.markdown("<br><h5>📋 Historial Clínico</h5>", unsafe_allow_html=True)
@@ -1199,18 +1072,10 @@ def main():
                             emoji_tipo = "🩺"
                             titulo_evento = row['Tipo Evento']
                             
-                            if row['Tipo Evento'] == "VACUNACION":
-                                emoji_tipo = "💉"
-                                titulo_evento = "Vacunación"
-                            elif row['Tipo Evento'] == "TRATAMIENTO":
-                                emoji_tipo = "💊"
-                                titulo_evento = "Tratamiento"
-                            elif row['Tipo Evento'] == "MASTITIS":
-                                emoji_tipo = "🔴"
-                                titulo_evento = "Mastitis"
-                            elif row['Tipo Evento'] == "MUERTE":
-                                emoji_tipo = "💀"
-                                titulo_evento = "Muerte"
+                            if row['Tipo Evento'] == "VACUNACION": emoji_tipo = "💉"; titulo_evento = "Vacunación"
+                            elif row['Tipo Evento'] == "TRATAMIENTO": emoji_tipo = "💊"; titulo_evento = "Tratamiento"
+                            elif row['Tipo Evento'] == "MASTITIS": emoji_tipo = "🔴"; titulo_evento = "Mastitis"
+                            elif row['Tipo Evento'] == "MUERTE": emoji_tipo = "💀"; titulo_evento = "Muerte"
                             
                             st.markdown(f"""
                             <div class="vet-card">
@@ -1240,9 +1105,7 @@ def main():
                         
                         col_cancel_t, col_save_t = st.columns(2)
                         with col_cancel_t:
-                            if st.form_submit_button("Cancelar"):
-                                st.session_state.sub_accion_veterinaria = None
-                                st.rerun()
+                            if st.form_submit_button("Cancelar"): st.session_state.sub_accion_veterinaria = None; st.rerun()
                         with col_save_t:
                             if st.form_submit_button("Registrar", type="primary"):
                                 if ft_medicamento:
@@ -1264,9 +1127,7 @@ def main():
                         
                         col_cancel_v, col_save_v = st.columns(2)
                         with col_cancel_v:
-                            if st.form_submit_button("Cancelar"):
-                                st.session_state.sub_accion_veterinaria = None
-                                st.rerun()
+                            if st.form_submit_button("Cancelar"): st.session_state.sub_accion_veterinaria = None; st.rerun()
                         with col_save_v:
                             if st.form_submit_button("Registrar", type="primary"):
                                 datos_vac = [str(fv_fecha), "VACUNACION", animal_id, fv_vacuna, "", fv_notas]
@@ -1286,14 +1147,8 @@ def main():
                         with c_m_center:
                             st.markdown("""
                             <div class="ubre-box">
-                                <div class="ubre-row">
-                                    <div class="ubre-num">1</div>
-                                    <div class="ubre-num">2</div>
-                                </div>
-                                <div class="ubre-row">
-                                    <div class="ubre-num">3</div>
-                                    <div class="ubre-num">4</div>
-                                </div>
+                                <div class="ubre-row"><div class="ubre-num">1</div><div class="ubre-num">2</div></div>
+                                <div class="ubre-row"><div class="ubre-num">3</div><div class="ubre-num">4</div></div>
                             </div>
                             """, unsafe_allow_html=True)
                         with c_m_right:
@@ -1303,9 +1158,7 @@ def main():
                         fm_tratamiento = st.checkbox("Poner en tratamiento")
                         col_cancel_m, col_save_m = st.columns(2)
                         with col_cancel_m:
-                            if st.form_submit_button("Cancelar"):
-                                st.session_state.sub_accion_veterinaria = None
-                                st.rerun()
+                            if st.form_submit_button("Cancelar"): st.session_state.sub_accion_veterinaria = None; st.rerun()
                         with col_save_m:
                             if st.form_submit_button("Registrar", type="primary"):
                                 if u1 != "-" or u2 != "-" or u3 != "-" or u4 != "-":
@@ -1330,9 +1183,7 @@ def main():
                         fmu_notas = st.text_area("Notas y observaciones")
                         col_cancel_mu, col_save_mu = st.columns(2)
                         with col_cancel_mu:
-                            if st.form_submit_button("Cancelar"):
-                                st.session_state.sub_accion_veterinaria = None
-                                st.rerun()
+                            if st.form_submit_button("Cancelar"): st.session_state.sub_accion_veterinaria = None; st.rerun()
                         with col_save_mu:
                             if st.form_submit_button("Registrar", type="primary"):
                                 datos_muerte = [str(fmu_fecha), "MUERTE", animal_id, fmu_causa, "", fmu_notas]
@@ -1340,14 +1191,11 @@ def main():
                                 st.session_state.sub_accion_veterinaria = None
                                 st.rerun()
 
-            # --- VISTA 6: REPRODUCCIÓN (CON ABORTO Y PARTO CORREGIDO) ---
             elif st.session_state.nav_gestion == 'reproduccion':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
 
-                if st.button("⬅️ Volver al Perfil", key="btn_back_repro"):
-                    ir_a_perfil(animal_id)
-                    st.rerun()
+                if st.button("⬅️ Volver al Perfil", key="btn_back_repro"): ir_a_perfil(animal_id); st.rerun()
 
                 # LOGICA ESTADÍSTICAS REPRO
                 df_vaca_hist = pd.DataFrame()
@@ -1368,69 +1216,45 @@ def main():
                                 dias_abiertos = (date.today() - f_parto).days
                         except: pass
 
-                # Header Verde
                 st.markdown(f"""
                 <div class="repro-stats">
                     <h3>Estado reproductivo</h3>
-                    <div class="stat-row">
-                        <span>Último parto</span>
-                        <strong>{ultimo_parto_str}</strong>
-                    </div>
-                    <div class="stat-row">
-                        <span>Estado</span>
-                        <strong>{datos['Estado']}</strong>
-                    </div>
-                    <div class="stat-row" style="border:none;">
-                        <span>Días abiertos</span>
-                        <strong>{dias_abiertos} día(s)</strong>
-                    </div>
+                    <div class="stat-row"><span>Último parto</span><strong>{ultimo_parto_str}</strong></div>
+                    <div class="stat-row"><span>Estado</span><strong>{datos['Estado']}</strong></div>
+                    <div class="stat-row" style="border:none;"><span>Días abiertos</span><strong>{dias_abiertos} día(s)</strong></div>
                 </div>
                 """, unsafe_allow_html=True)
 
                 if st.session_state.sub_accion_reproduccion is None:
                     col_r1, col_r2 = st.columns(2)
                     with col_r1:
-                        if st.button("🐮 Fecundación", use_container_width=True):
-                            st.session_state.sub_accion_reproduccion = 'fecundacion'
-                            st.rerun()
+                        if st.button("🐮 Fecundación", use_container_width=True): st.session_state.sub_accion_reproduccion = 'fecundacion'; st.rerun()
                         st.write("")
-                        if st.button("🏥 Parto", use_container_width=True):
-                            st.session_state.sub_accion_reproduccion = 'parto'
-                            st.rerun()
+                        if st.button("🏥 Parto", use_container_width=True): st.session_state.sub_accion_reproduccion = 'parto'; st.rerun()
                         st.write("")
                         st.button("🕒 Crear Evento", use_container_width=True) 
                     with col_r2:
-                        if st.button("🔍 Chequeo", use_container_width=True):
-                            st.session_state.sub_accion_reproduccion = 'chequeo'
-                            st.rerun()
+                        if st.button("🔍 Chequeo", use_container_width=True): st.session_state.sub_accion_reproduccion = 'chequeo'; st.rerun()
                         st.write("")
-                        # === BOTÓN MODIFICADO PARA ABORTO ===
-                        if st.button("⚠️ Aborto", use_container_width=True): 
-                            st.session_state.sub_accion_reproduccion = 'aborto'
-                            st.rerun()
+                        if st.button("⚠️ Aborto", use_container_width=True):  st.session_state.sub_accion_reproduccion = 'aborto'; st.rerun()
 
                     st.write("")
                     st.markdown("**Partos/Abortos**")
                     hist_partos = pd.DataFrame()
-                    if not df_vaca_hist.empty:
-                        hist_partos = df_vaca_hist[df_vaca_hist["Tipo Evento"].isin(["PARTO", "ABORTO"])]
+                    if not df_vaca_hist.empty: hist_partos = df_vaca_hist[df_vaca_hist["Tipo Evento"].isin(["PARTO", "ABORTO"])]
 
                     st.markdown("""
                     <div class="tabla-header">
-                        <div style="width:25%">Fecha</div>
-                        <div style="width:25%">Tipo</div>
-                        <div style="width:25%">Género</div>
-                        <div style="width:25%">Cría</div>
+                        <div style="width:25%">Fecha</div><div style="width:25%">Tipo</div>
+                        <div style="width:25%">Género</div><div style="width:25%">Cría</div>
                     </div>
                     """, unsafe_allow_html=True)
 
                     if not hist_partos.empty:
                         for idx, row in hist_partos.iloc[::-1].iterrows():
-                            genero = "--"
-                            cria_txt = "--"
+                            genero = "--"; cria_txt = "--"
                             try:
-                                d1 = row['Detalle 1']
-                                d2 = row['Detalle 2']
+                                d1 = row['Detalle 1']; d2 = row['Detalle 2']
                                 if "Macho" in d1: genero = "Macho"
                                 elif "Hembra" in d1: genero = "Hembra"
                                 if "ID Cría:" in d2: cria_txt = d2.replace("ID Cría:", "").strip()
@@ -1438,10 +1262,8 @@ def main():
                             tipo_txt = "Parto" if row['Tipo Evento'] == "PARTO" else "Aborto"
                             st.markdown(f"""
                             <div class="tabla-row">
-                                <div style="width:25%">{row['Fecha']}</div>
-                                <div style="width:25%">{tipo_txt}</div>
-                                <div style="width:25%">{genero}</div>
-                                <div style="width:25%">{cria_txt}</div>
+                                <div style="width:25%">{row['Fecha']}</div><div style="width:25%">{tipo_txt}</div>
+                                <div style="width:25%">{genero}</div><div style="width:25%">{cria_txt}</div>
                             </div>
                             """, unsafe_allow_html=True)
                     else: st.info("No hay partos registrados.")
@@ -1454,8 +1276,7 @@ def main():
                         st.markdown("""<div class="empty-state"><p>No hay historial reproductivo</p></div>""", unsafe_allow_html=True)
                     else:
                         for idx, row in hist_repro.iloc[::-1].iterrows():
-                            emoji_tipo = "🧬"
-                            titulo_evento = row['Tipo Evento']
+                            emoji_tipo = "🧬"; titulo_evento = row['Tipo Evento']
                             if row['Tipo Evento'] == "FECUNDACION": emoji_tipo = "❤️"; titulo_evento = "Fecundación"
                             elif row['Tipo Evento'] == "CHEQUEO_REPRO": emoji_tipo = "🔍"; titulo_evento = "Chequeo"
                             elif row['Tipo Evento'] == "PARTO": emoji_tipo = "🎉"; titulo_evento = "Parto"
@@ -1469,10 +1290,8 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                     
-                    if st.button("➕ Registro Rápido", type="primary", key="btn_add_repro"):
-                        st.toast("Usa los botones de arriba para agregar registros.")
+                    if st.button("➕ Registro Rápido", type="primary", key="btn_add_repro"): st.toast("Usa los botones de arriba para agregar registros.")
 
-                # --- FORMULARIOS DE REPRODUCCIÓN ---
                 elif st.session_state.sub_accion_reproduccion == 'fecundacion':
                     st.subheader("Nueva Fecundación")
                     c_f1, c_f2 = st.columns(2)
@@ -1607,7 +1426,6 @@ def main():
                                 st.session_state.sub_accion_reproduccion = None
                                 st.rerun()
 
-            # --- VISTA 4: DATOS GENERALES ---
             elif st.session_state.nav_gestion == 'detalle':
                 animal_id = st.session_state.animal_seleccionado
                 datos = df[df["ID"] == animal_id].iloc[0]
@@ -1617,17 +1435,14 @@ def main():
                     if st.button("⬅️"):
                         ir_a_perfil(animal_id)
                         st.rerun()
-                with col_tit:
-                    st.subheader("Datos generales")
+                with col_tit: st.subheader("Datos generales")
 
                 with st.container(border=True):
-                    # Datos básicos
                     st.text_input("Nombre", value=datos['Nombre'], disabled=True)
                     st.text_input("ID", value=datos['ID'], disabled=True)
                     st.text_input("Raza", value=datos['Raza'], disabled=True)
                     st.text_input("Sexo", value=datos['Sexo'], disabled=True)
                     
-                    # Intentamos mostrar datos extendidos si existen
                     padre_txt = datos.get("Padre", "--") if "Padre" in datos else "--"
                     madre_txt = datos.get("Madre", "--") if "Madre" in datos else "--"
                     
@@ -1636,8 +1451,7 @@ def main():
                     with c_padres2: st.text_input("Madre", value=madre_txt, disabled=True)
                     
                     notas_txt = datos.get("Notas", "") if "Notas" in datos else ""
-                    if notas_txt:
-                        st.text_area("Notas registradas", value=notas_txt, disabled=True)
+                    if notas_txt: st.text_area("Notas registradas", value=notas_txt, disabled=True)
 
                 with st.expander("✏️ Editar estos datos"):
                     with st.form("form_editar_app"):
@@ -1660,9 +1474,37 @@ def main():
                             eliminar_animal_db(hoja_animales, animal_id)
                             ir_a_lista()
                             st.rerun()
+                            # --- FUNCIÓN DE AUTO-REPARACIÓN (Definida aquí para fácil integración) ---
+        def reparar_ids_historial_local(sheet_conn):
+            try:
+                hoja = sheet_conn.worksheet("Historial")
+                registros = hoja.get_all_values()
+                if not registros: return 0
+                
+                header = registros[0]
+                if len(header) < 7:
+                    hoja.update_cell(1, 7, "ID Evento")
+                elif header[6].strip() == "":
+                    hoja.update_cell(1, 7, "ID Evento")
+                
+                lista_updates = []
+                for i, fila in enumerate(registros):
+                    if i == 0: continue # Saltar el encabezado
+                    # Si la fila no tiene 7 columnas, o la columna G está vacía
+                    if len(fila) < 7 or str(fila[6]).strip() == "":
+                        nuevo_id = str(uuid.uuid4())[:8]
+                        lista_updates.append({'range': f'G{i+1}', 'values': [[nuevo_id]]})
+                
+                if lista_updates:
+                    hoja.batch_update(lista_updates)
+                    cargar_datos.clear() # Limpiar caché para forzar recarga
+                return len(lista_updates)
+            except Exception as e:
+                st.error(f"Error reparando IDs: {e}")
+                return 0
 
         # ==========================================
-        # 4. ACCIONES RÁPIDAS
+        # 4. ACCIONES RÁPIDAS (INTEGRADO CON FINANZAS)
         # ==========================================
         with tab_acc:
             col_a, col_b = st.columns(2)
@@ -1701,10 +1543,15 @@ def main():
                         f_trans_emp = st.text_input("Empresa de transporte")
                         f_trans_guia = st.text_input("Número guía de transporte")
 
-                    st.markdown('<div class="app-header">Datos generales</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="app-header">Datos generales y Pago</div>', unsafe_allow_html=True)
                     c_d1, c_d2 = st.columns(2)
                     with c_d1: f_tipo_animal = st.selectbox("Tipo de animal", ["Bovino", "Porcino", "Ovino", "Caprino", "Equino", "Bufalino", "Otro"])
                     with c_d2: f_precio_kg = st.number_input("Precio por kg *", min_value=0.0)
+                    
+                    f_monto_total_compra = st.number_input("Costo Total de la Compra (Pago) *", min_value=0.0)
+                    
+                    opciones_cuentas = df_cuentas['Nombre'].tolist() if not df_cuentas.empty else ["Caja General (Por defecto)"]
+                    cuenta_origen = st.selectbox("📤 Cuenta Origen (De donde sale el dinero)", opciones_cuentas)
 
                     f_responsable = st.text_input("Persona responsable de la compra *")
                     f_notas_compra = st.text_area("Notas y observaciones")
@@ -1717,54 +1564,72 @@ def main():
                             st.rerun()
                     with c_btn_c2:
                         if st.form_submit_button("Siguiente", type="primary"):
-                            if f_precio_kg > 0 and f_responsable:
+                            if f_monto_total_compra > 0 and f_responsable:
                                 detalle_compra = f"Vendedor: {f_vend_nombre} | Resp: {f_responsable}"
-                                notas_compra = f"Ubicación: {f_ciudad}, {f_region} | Precio: {f_precio_kg} {f_moneda_compra}/kg | {f_notas_compra}"
+                                notas_compra = f"Monto Total: {f_monto_total_compra} | Pagado desde: {cuenta_origen} | Ubicación: {f_ciudad}, {f_region} | Precio: {f_precio_kg} {f_moneda_compra}/kg | {f_notas_compra}"
                                 datos_compra = [str(f_fecha_compra), "COMPRA", "LOTE EXTERNO", f_tipo_animal, detalle_compra, notas_compra]
                                 guardar_evento(sh, datos_compra, "Compra de Ganado")
+                                
+                                if not df_cuentas.empty:
+                                    actualizar_saldo_cuenta(sh, cuenta_origen, -f_monto_total_compra)
+                                
                                 st.session_state.accion_activa = None
-                                st.success("Compra registrada con éxito.")
+                                st.success("Compra registrada y saldo descontado con éxito.")
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error("Por favor completa los campos obligatorios (*) como el Precio por kg y el Responsable.")
+                                st.error("Por favor completa los campos obligatorios (*) como el Costo Total y el Responsable.")
 
+            # --- VENTA DE GANADO ---
             elif st.session_state.accion_activa == "venta":
                 st.subheader("🚛 Nueva Venta de Ganado")
                 with st.form("form_venta_completa"):
                     c_f1, c_f2 = st.columns(2)
                     with c_f1: fecha_venta = st.date_input("Fecha Venta", date.today())
                     with c_f2: fecha_envio = st.date_input("Fecha Envío", date.today())
+                    
                     st.markdown('<div class="seccion-titulo">👤 Comprador</div>', unsafe_allow_html=True)
                     c_c1, c_c2 = st.columns(2)
                     with c_c1: comp_nombre = st.text_input("Nombre/Empresa")
                     with c_c2: comp_telefono = st.text_input("Teléfono")
+                    
                     st.markdown('<div class="seccion-titulo">📍 Destino y Transporte</div>', unsafe_allow_html=True)
                     dest_ciudad = st.text_input("Ciudad / Destino / Finca")
                     with st.expander("Información del Transporte (Opcional)"):
                             c_t1, c_t2 = st.columns(2)
                             with c_t1: trans_guia = st.text_input("Nro. Guía")
                             with c_t2: trans_placa = st.text_input("Placa")
-                    st.markdown('<div class="seccion-titulo">💰 Datos Económicos</div>', unsafe_allow_html=True)
+                            
+                    st.markdown('<div class="seccion-titulo">💰 Datos Económicos y Cobro</div>', unsafe_allow_html=True)
                     pre_select = [st.session_state.animal_seleccionado] if st.session_state.animal_seleccionado and st.session_state.animal_seleccionado in lista_ids_activos else None
                     ids_seleccionados = st.multiselect("Animales (Activos)*", lista_ids_activos, default=pre_select)
+                    
                     c_m1, c_m2, c_m3 = st.columns([1,1,2])
                     with c_m1: moneda = st.selectbox("Moneda", ["USD", "VES", "COP"])
-                    with c_m2: monto_manual = st.number_input("Precio", min_value=0.0)
+                    with c_m2: monto_manual = st.number_input("Precio Total", min_value=0.0)
                     with c_m3: tipo_precio = st.radio("Tipo:", ["Por Kilo", "Por Cabeza", "Lote"], horizontal=True)
+                    
+                    opciones_cuentas = df_cuentas['Nombre'].tolist() if not df_cuentas.empty else ["Caja General (Por defecto)"]
+                    cuenta_destino = st.selectbox("📥 Cuenta Destino (Donde entra el dinero)", opciones_cuentas)
+                    
                     notas_venta = st.text_area("Notas")
                     traslado = st.toggle("¿Trasladar a otro usuario de Control Ganadero?")
+                    
                     if st.form_submit_button("✅ CONFIRMAR VENTA", type="primary"):
                         if not ids_seleccionados: st.error("Selecciona un animal")
                         else:
                             precio_str = f"{monto_manual} {moneda} ({tipo_precio})"
                             for animal_id in ids_seleccionados:
                                 detalle = f"Comp: {comp_nombre} | Dest: {dest_ciudad}"
-                                notas_full = f"Guia: {trans_guia} | {notas_venta}"
+                                notas_full = f"Ingresa a: {cuenta_destino} | Guia: {trans_guia} | {notas_venta}"
                                 datos_venta = [str(fecha_venta), "VENTA", animal_id, precio_str, detalle, notas_full]
                                 guardar_evento(sh, datos_venta, "Venta")
                                 cambiar_estado_vendido(hoja_animales, animal_id)
-                            st.success("Venta registrada.")
+                            
+                            if not df_cuentas.empty:
+                                actualizar_saldo_cuenta(sh, cuenta_destino, monto_manual)
+                            
+                            st.success("Venta registrada y saldo actualizado.")
                             if st.session_state.animal_seleccionado: ir_a_lista() 
                             time.sleep(2)
                             st.rerun()
@@ -1779,6 +1644,7 @@ def main():
                     if st.form_submit_button("Guardar"):
                         datos_leche = [str(f_fecha), "PRODUCCION_LECHE", "LOTE_GENERAL", str(f_litros), str(f_vacas), ""]
                         guardar_evento(sh, datos_leche, "Registro de Leche")
+                        st.rerun()
 
             elif st.session_state.accion_activa == "peso":
                 st.subheader("⚖️ Nuevo Pesaje")
@@ -1790,8 +1656,8 @@ def main():
                     if st.form_submit_button("Registrar"):
                         datos_peso = [str(p_fecha), "PESAJE", p_animal, str(p_kilos), "", "Control"]
                         guardar_evento(sh, datos_peso, "Pesaje")
+                        st.rerun()
 
-            # --- NUEVO MENÚ DE SANIDAD (TRATAMIENTO MASIVO / VACUNACIÓN MASIVA) ---
             elif st.session_state.accion_activa == "sanidad":
                 if st.session_state.sub_accion_sanidad_rapida is None:
                     st.markdown("<h3>⬅ Selecciona una opción</h3>", unsafe_allow_html=True)
@@ -1816,7 +1682,6 @@ def main():
                         st.session_state.sub_accion_sanidad_rapida = None
                         st.rerun()
                     
-                    # Filtros dinámicos (Fuera del formulario para que el conteo se actualice al instante)
                     st.markdown('<br>', unsafe_allow_html=True)
                     c_tm1, c_tm2 = st.columns(2)
                     with c_tm1: f_tipo_animal_tm = st.selectbox("Tipo de animal *", LISTA_ESPECIES, index=0, key="tipo_anim_tm")
@@ -1824,24 +1689,17 @@ def main():
                     
                     ids_afectados_tm = []
                     if not df_activos.empty:
-                        # Filtrar según lo seleccionado
-                        if f_filtro_tm == "Todos los animales":
-                            ids_afectados_tm = df_activos['ID'].tolist()
-                        elif f_filtro_tm == "Todos los machos":
-                            ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
-                        elif f_filtro_tm == "Todas las hembras":
-                            ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
-                        elif f_filtro_tm == "Selección manual":
-                            ids_afectados_tm = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_tm")
+                        if f_filtro_tm == "Todos los animales": ids_afectados_tm = df_activos['ID'].tolist()
+                        elif f_filtro_tm == "Todos los machos": ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
+                        elif f_filtro_tm == "Todas las hembras": ids_afectados_tm = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
+                        elif f_filtro_tm == "Selección manual": ids_afectados_tm = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_tm")
                     
-                    # Conteo reactivo
                     st.markdown(f"""
                     <div style='background-color: #e0e0e0; padding: 10px; font-weight: bold; text-align: right; border-radius: 0 0 5px 5px; margin-bottom: 15px;'>
                         Total de animales seleccionados: {len(ids_afectados_tm)}
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Formulario de datos médicos
                     with st.form("form_tratamiento_masivo_full"):
                         ftm_nombre = st.text_input("Nombre del tratamiento")
                         c_f1, c_f2 = st.columns(2)
@@ -1859,10 +1717,8 @@ def main():
                         st.markdown("<br>", unsafe_allow_html=True)
                         submitted_tm = st.form_submit_button("Registrar", type="primary")
                         if submitted_tm:
-                            if not ids_afectados_tm:
-                                st.error("Debe seleccionar al menos un animal.")
-                            elif not ftm_med:
-                                st.error("El campo 'Medicamento' es obligatorio.")
+                            if not ids_afectados_tm: st.error("Debe seleccionar al menos un animal.")
+                            elif not ftm_med: st.error("El campo 'Medicamento' es obligatorio.")
                             else:
                                 with st.spinner(f"Registrando tratamiento para {len(ids_afectados_tm)} animales..."):
                                     for animal_id in ids_afectados_tm:
@@ -1887,7 +1743,6 @@ def main():
                         st.session_state.sub_accion_sanidad_rapida = None
                         st.rerun()
 
-                    # Filtros dinámicos
                     st.markdown('<br>', unsafe_allow_html=True)
                     c_vm1, c_vm2 = st.columns(2)
                     with c_vm1: f_tipo_animal_vm = st.selectbox("Tipo de animal *", LISTA_ESPECIES, index=0, key="tipo_anim_vac")
@@ -1895,24 +1750,17 @@ def main():
                     
                     ids_afectados_vac = []
                     if not df_activos.empty:
-                        # Filtrar según lo seleccionado
-                        if f_filtro_vm == "Todos los animales":
-                            ids_afectados_vac = df_activos['ID'].tolist()
-                        elif f_filtro_vm == "Todos los machos":
-                            ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
-                        elif f_filtro_vm == "Todas las hembras":
-                            ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
-                        elif f_filtro_vm == "Selección manual":
-                            ids_afectados_vac = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_vac")
+                        if f_filtro_vm == "Todos los animales": ids_afectados_vac = df_activos['ID'].tolist()
+                        elif f_filtro_vm == "Todos los machos": ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Macho']['ID'].tolist()
+                        elif f_filtro_vm == "Todas las hembras": ids_afectados_vac = df_activos[df_activos['Sexo'] == 'Hembra']['ID'].tolist()
+                        elif f_filtro_vm == "Selección manual": ids_afectados_vac = st.multiselect("Elige los animales", df_activos['ID'].tolist(), key="multi_vac")
                     
-                    # Conteo reactivo
                     st.markdown(f"""
                     <div style='background-color: #e0e0e0; padding: 10px; font-weight: bold; text-align: right; border-radius: 0 0 5px 5px; margin-bottom: 15px;'>
                         Total de animales seleccionados: {len(ids_afectados_vac)}
                     </div>
                     """, unsafe_allow_html=True)
 
-                    # Formulario de vacunación
                     with st.form("form_vacunacion_masiva_full"):
                         fvm_fecha = st.date_input("Fecha *", date.today())
                         fvm_vacuna = st.selectbox("Vacuna *", LISTA_VACUNAS)
@@ -1921,8 +1769,7 @@ def main():
                         st.markdown("<br>", unsafe_allow_html=True)
                         submitted_vm = st.form_submit_button("Registrar", type="primary")
                         if submitted_vm:
-                            if not ids_afectados_vac:
-                                st.error("Debe seleccionar al menos un animal.")
+                            if not ids_afectados_vac: st.error("Debe seleccionar al menos un animal.")
                             else:
                                 with st.spinner(f"Registrando vacunación para {len(ids_afectados_vac)} animales..."):
                                     for animal_id in ids_afectados_vac:
@@ -1937,19 +1784,284 @@ def main():
                 st.info("👆 Selecciona una opción arriba.")
 
         # ==========================================
-        # 5. HISTORIAL VENTAS
+        # 5. 🏦 MÓDULO DE FINANZAS Y CUENTAS
         # ==========================================
-        with tab_ventas:
-            st.header("💰 Historial de Ventas")
-            if not df_hist.empty and "Tipo Evento" in df_hist.columns:
-                mask_venta = df_hist["Tipo Evento"].astype(str).str.contains("VENTA|COMPRA", case=False, na=False)
-                df_ventas = df_hist[mask_venta]
-                if not df_ventas.empty:
-                    st.dataframe(df_ventas[["Fecha", "Tipo Evento", "Detalle 1", "Detalle 2"]], use_container_width=True, hide_index=True)
+        with tab_finanzas:
+            st.markdown("""
+            <div style='text-align:center; padding: 10px; margin-bottom: 20px;'>
+                <h2 style='margin:0; color: #1976d2;'>Gestión de Cuentas y Finanzas</h2>
+                <p style='color:#666;'>Control de Flujo de Caja, Cuentas Bancarias y Aportes</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            sub_bal, sub_hist, sub_ingresos, sub_gastos, sub_transf, sub_capital, sub_config = st.tabs([
+                "📊 Balance", "📜 Historial", "💰 Ingresos", "💸 Gastos", "🔄 Transferencias", "📥 Capital", "⚙️ Configurar"
+            ])
+            
+            # --- 5.1 BALANCE ---
+            with sub_bal:
+                st.markdown("### Estado Financiero Actual")
+                if not df_cuentas.empty:
+                    cols = st.columns(3)
+                    for i, row in df_cuentas.iterrows():
+                        col = cols[i % 3]
+                        with col:
+                            st.markdown(f"""
+                            <div class="cuenta-card">
+                                <div class="cuenta-title">{row['Nombre']}</div>
+                                <div class="cuenta-saldo">{float(row['Saldo']):,.2f} <span class="cuenta-moneda">{row['Moneda']}</span></div>
+                            </div>
+                            """, unsafe_allow_html=True)
                 else:
-                    st.warning("No hay ventas ni compras registradas.")
-            else:
-                st.info("Sin historial.")
+                    st.info("No hay cuentas creadas. Ve a '⚙️ Configurar Cuentas' para empezar.")
+
+            # --- 5.2 HISTORIAL DETALLADO ---
+            with sub_hist:
+                st.markdown("### 📜 Historial de Movimientos")
+                
+                # --- DETECCIÓN DE IDs FALTANTES PARA AUTO-REPARACIÓN ---
+                if not df_hist.empty:
+                    faltan_id = 0
+                    if "ID Evento" not in df_hist.columns:
+                        faltan_id = len(df_hist)
+                    else:
+                        faltan_id = len(df_hist[df_hist["ID Evento"].astype(str).str.strip() == ""])
+                        
+                    if faltan_id > 0:
+                        st.warning(f"⚠️ Se detectaron **{faltan_id}** registros antiguos sin 'ID Evento'. Para poder anularlos, el sistema debe asignarles un código único.")
+                        if st.button("🛠️ Generar IDs Faltantes Automáticamente", type="primary"):
+                            with st.spinner("Inyectando IDs en tu base de datos... esto puede tardar unos segundos..."):
+                                arreglados = reparar_ids_historial_local(sh)
+                                if arreglados > 0:
+                                    st.success(f"¡Se asignaron {arreglados} IDs con éxito!")
+                                    time.sleep(2)
+                                    st.rerun()
+                                else:
+                                    st.error("Hubo un problema. Verifica tu conexión a Google Sheets.")
+                        st.markdown("---")
+
+                st.markdown("#### 🗑️ Anular transacción")
+                st.write("Copia el 'ID Evento' que aparece en las tarjetas de abajo y pégalo aquí para eliminar el movimiento y revertir el saldo de tu cuenta bancaria.")
+                c_del1, c_del2 = st.columns([3, 1])
+                with c_del1:
+                    id_a_eliminar = st.text_input("Ingrese el ID del Evento a eliminar:", placeholder="Ej: a1b2c3d4")
+                with c_del2:
+                    st.write("") 
+                    if st.button("Anular Transacción", type="primary", use_container_width=True):
+                        if id_a_eliminar:
+                            if eliminar_evento_finanzas_por_id(sh, id_a_eliminar):
+                                st.rerun()
+                        else:
+                            st.warning("Ingrese un ID válido primero.")
+                st.markdown("---")
+
+                # Calendario y Filtros de Fecha
+                c_filtro1, c_filtro2 = st.columns([1, 2])
+                with c_filtro1:
+                    filtro_fecha = st.selectbox("📅 Filtrar por fecha", ["Todos los tiempos", "Hoy", "Esta semana", "Este mes", "Mes pasado", "Rango personalizado"])
+                
+                f_inicio = None
+                f_fin = None
+                hoy = date.today()
+                
+                if filtro_fecha == "Hoy":
+                    f_inicio = hoy
+                    f_fin = hoy
+                elif filtro_fecha == "Esta semana":
+                    f_inicio = hoy - timedelta(days=hoy.weekday())
+                    f_fin = hoy
+                elif filtro_fecha == "Este mes":
+                    f_inicio = hoy.replace(day=1)
+                    f_fin = hoy
+                elif filtro_fecha == "Mes pasado":
+                    f_fin = hoy.replace(day=1) - timedelta(days=1)
+                    f_inicio = f_fin.replace(day=1)
+                elif filtro_fecha == "Rango personalizado":
+                    with c_filtro2:
+                        fechas = st.date_input("Selecciona el rango:", [hoy - timedelta(days=7), hoy])
+                        if len(fechas) == 2:
+                            f_inicio, f_fin = fechas
+                
+                if not df_hist.empty and "Tipo Evento" in df_hist.columns:
+                    tipos_financieros = ["VENTA", "COMPRA", "TRANSFERENCIA", "APORTE_CAPITAL", "GASTO_OPERATIVO", "INGRESO_OPERATIVO"]
+                    df_finanzas = df_hist[df_hist["Tipo Evento"].isin(tipos_financieros)].copy()
+                    
+                    if f_inicio and f_fin:
+                        df_finanzas["Fecha_DT"] = pd.to_datetime(df_finanzas["Fecha"], errors='coerce').dt.date
+                        df_finanzas = df_finanzas[(df_finanzas["Fecha_DT"] >= f_inicio) & (df_finanzas["Fecha_DT"] <= f_fin)]
+                    
+                    if not df_finanzas.empty:
+                        df_finanzas_rev = df_finanzas.iloc[::-1]
+                        
+                        for _, row in df_finanzas_rev.iterrows():
+                            tipo = row["Tipo Evento"]
+                            fecha = row["Fecha"]
+                            
+                            id_evento = str(row.get("ID Evento", ""))
+                            if not id_evento.strip(): id_evento = "N/A"
+                            
+                            icon = "📄"
+                            css_class = "fin-neu"
+                            titulo = tipo
+                            sub = f"ID Evento: **{id_evento}** | {row['Detalle 1']}"
+                            notas = str(row['Notas'])
+                            
+                            if tipo == "VENTA":
+                                icon = "📈"
+                                css_class = "fin-pos"
+                                titulo = "Ingreso por Venta de Ganado"
+                                sub = f"ID Evento: **{id_evento}** | Animal: {row['ID Animal']} | {row['Detalle 2']}"
+                            elif tipo == "COMPRA":
+                                icon = "📉"
+                                css_class = "fin-neg"
+                                titulo = "Egreso por Compra de Ganado"
+                                sub = f"ID Evento: **{id_evento}** | {row['Detalle 1']}"
+                            elif tipo == "APORTE_CAPITAL":
+                                icon = "📥"
+                                css_class = "fin-pos"
+                                titulo = "Aporte de Capital / Préstamo"
+                                sub = f"ID Evento: **{id_evento}** | {row['Detalle 1']}"
+                            elif tipo == "GASTO_OPERATIVO":
+                                icon = "💸"
+                                css_class = "fin-neg"
+                                titulo = "Gasto Operativo"
+                                sub = f"ID Evento: **{id_evento}** | {row['Detalle 2']} | {row['Detalle 1']}"
+                            elif tipo == "INGRESO_OPERATIVO":
+                                icon = "💰"
+                                css_class = "fin-pos"
+                                titulo = "Ingreso Operativo (Subproductos)"
+                                sub = f"ID Evento: **{id_evento}** | {row['Detalle 2']} | {row['Detalle 1']}"
+                            elif tipo == "TRANSFERENCIA":
+                                icon = "🔄"
+                                css_class = "fin-neu"
+                                titulo = "Transferencia entre cuentas"
+                                sub = f"ID Evento: **{id_evento}** | {row['Detalle 1']} ➔ {row['Detalle 2']}"
+
+                            st.markdown(f"""
+                            <div class="fin-row {css_class}">
+                                <div class="fin-icon">{icon}</div>
+                                <div class="fin-details">
+                                    <div class="fin-title">{titulo}</div>
+                                    <div class="fin-subtitle">{sub}</div>
+                                    <div class="fin-notas">{notas}</div>
+                                </div>
+                                <div class="fin-date">{fecha}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info(f"No hay movimientos financieros para el filtro de fecha actual.")
+                else:
+                    st.info("El historial está vacío.")
+
+            # --- 5.3 INGRESOS OPERATIVOS ---
+            with sub_ingresos:
+                st.markdown("### 💰 Registro de Ingresos Operativos")
+                st.write("Registra las ventas del día a día como queso, leche, suero, huevos, cosechas, etc.")
+                if not df_cuentas.empty:
+                    with st.form("form_ingresos_operativos"):
+                        c_i1, c_i2 = st.columns(2)
+                        with c_i1: 
+                            categoria_ingreso = st.selectbox("Categoría de Ingreso", [
+                                "Venta de Queso", "Venta de Leche", "Venta de Huevos", 
+                                "Venta de Cosecha/Siembra", "Venta de Subproductos", "Otros Ingresos"
+                            ])
+                        with c_i2: cta_cobro = st.selectbox("Ingresa a (Cuenta Bancaria/Caja)", df_cuentas['Nombre'].tolist())
+                        
+                        monto_ingreso = st.number_input("Monto Recibido", min_value=0.0)
+                        desc_ingreso = st.text_input("Descripción detallada (Ej: 20kg de Queso Llanero o 5 cartones de huevo)")
+                        
+                        if st.form_submit_button("Registrar Ingreso", type="primary"):
+                            if monto_ingreso > 0:
+                                actualizar_saldo_cuenta(sh, cta_cobro, monto_ingreso)
+                                datos_ingreso = [str(date.today()), "INGRESO_OPERATIVO", "FINANZAS", f"Monto: {monto_ingreso} (Cuenta: {cta_cobro})", categoria_ingreso, desc_ingreso]
+                                guardar_evento(sh, datos_ingreso, "Ingreso registrado")
+                                st.rerun()
+                            else: st.error("Monto inválido.")
+                else: st.info("Crea una cuenta para poder registrar ingresos.")
+
+            # --- 5.4 GASTOS OPERATIVOS ---
+            with sub_gastos:
+                st.markdown("### 💸 Registro de Gastos Operativos")
+                if not df_cuentas.empty:
+                    with st.form("form_gastos"):
+                        c_g1, c_g2 = st.columns(2)
+                        with c_g1: categoria_gasto = st.selectbox("Categoría", ["Alimentación (Concentrado/Pasto)", "Medicinas / Veterinaria", "Nómina / Personal", "Mantenimiento / Equipos", "Servicios", "Otros Gastos"])
+                        with c_g2: cta_pago = st.selectbox("Pagado desde (Cuenta)", df_cuentas['Nombre'].tolist())
+                        
+                        monto_gasto = st.number_input("Monto del Gasto", min_value=0.0)
+                        desc_gasto = st.text_input("Descripción detallada (Ej: 10 Sacos de Alimento)")
+                        
+                        if st.form_submit_button("Registrar Gasto", type="primary"):
+                            if monto_gasto > 0:
+                                actualizar_saldo_cuenta(sh, cta_pago, -monto_gasto)
+                                datos_gasto = [str(date.today()), "GASTO_OPERATIVO", "FINANZAS", f"Monto: {monto_gasto} (Cuenta: {cta_pago})", categoria_gasto, desc_gasto]
+                                guardar_evento(sh, datos_gasto, "Gasto registrado")
+                                st.rerun()
+                            else: st.error("Monto inválido.")
+                else: st.info("Crea una cuenta para poder registrar gastos.")
+
+            # --- 5.5 TRANSFERENCIAS / CANJE ---
+            with sub_transf:
+                st.markdown("### 🔄 Transferencias y Cambio de Divisas")
+                st.write("Mueve dinero entre cuentas o registra cambios de divisa.")
+                if not df_cuentas.empty and len(df_cuentas) >= 2:
+                    with st.form("form_transferencia"):
+                        lista_ctas = df_cuentas['Nombre'].tolist()
+                        c_t1, c_t2 = st.columns(2)
+                        with c_t1: cta_origen = st.selectbox("📤 Cuenta ORIGEN (Sale dinero)", lista_ctas, index=0)
+                        with c_t2: cta_destino = st.selectbox("📥 Cuenta DESTINO (Entra dinero)", lista_ctas, index=1)
+                        
+                        monto_transferir = st.number_input("Monto a debitar del Origen", min_value=0.0)
+                        tasa_cambio = st.number_input("Tasa de cambio (Opcional, multiplicador)", value=1.0, min_value=0.01)
+                        monto_recibir = monto_transferir * tasa_cambio
+                        st.info(f"La cuenta destino recibirá: **{monto_recibir:,.2f}**")
+                        
+                        if st.form_submit_button("Realizar Transferencia", type="primary"):
+                            if cta_origen == cta_destino: st.error("❌ La cuenta origen y destino no pueden ser la misma.")
+                            elif monto_transferir <= 0: st.error("❌ El monto debe ser mayor a 0.")
+                            else:
+                                actualizar_saldo_cuenta(sh, cta_origen, -monto_transferir)
+                                actualizar_saldo_cuenta(sh, cta_destino, monto_recibir)
+                                datos_transf = [str(date.today()), "TRANSFERENCIA", "FINANZAS", f"De: {cta_origen}", f"A: {cta_destino}", f"Monto Origen: {monto_transferir} | Monto Recibido: {monto_recibir}"]
+                                guardar_evento(sh, datos_transf, "Transferencia completada")
+                                st.rerun()
+                else:
+                    st.warning("Necesitas al menos 2 cuentas creadas para hacer transferencias.")
+
+            # --- 5.6 CAPITAL / PRÉSTAMO (INYECCIÓN DE DINERO) ---
+            with sub_capital:
+                st.markdown("### 📥 Registrar Capital o Préstamo")
+                st.write("Añade dinero de tu bolsillo o banco sin que cuente como un Ingreso Operativo.")
+                if not df_cuentas.empty:
+                    with st.form("form_capital"):
+                        cta_capital = st.selectbox("Cuenta Destino (Dónde cayó el dinero)", df_cuentas['Nombre'].tolist())
+                        concepto_cap = st.selectbox("Concepto", ["Aporte de Propietario (Bolsillo)", "Préstamo Bancario", "Préstamo Terceros", "Otro"])
+                        monto_cap = st.number_input("Monto Recibido", min_value=0.0)
+                        notas_cap = st.text_area("Notas / Razón (Opcional)")
+                        
+                        if st.form_submit_button("Ingresar Dinero", type="primary"):
+                            if monto_cap > 0:
+                                actualizar_saldo_cuenta(sh, cta_capital, monto_cap)
+                                datos_cap = [str(date.today()), "APORTE_CAPITAL", "FINANZAS", f"Cuenta: {cta_capital}", f"Monto: {monto_cap}", f"Concepto: {concepto_cap} | {notas_cap}"]
+                                guardar_evento(sh, datos_cap, "Aporte registrado")
+                                st.rerun()
+                            else: st.error("El monto debe ser mayor a 0.")
+                else: st.info("Crea una cuenta primero.")
+
+            # --- 5.7 CONFIGURAR CUENTAS ---
+            with sub_config:
+                st.markdown("### ⚙️ Nueva Cuenta")
+                with st.form("form_crear_cuenta"):
+                    c_cc1, c_cc2, c_cc3 = st.columns(3)
+                    with c_cc1: nom_cta = st.text_input("Nombre (Ej: Banco Banesco, Caja Fuerte)")
+                    with c_cc2: mon_cta = st.selectbox("Moneda", ["USD ($)", "VES (Bs)", "COP", "EUR"])
+                    with c_cc3: saldo_ini = st.number_input("Saldo Inicial", value=0.0)
+                    
+                    if st.form_submit_button("Crear Cuenta"):
+                        if nom_cta:
+                            crear_cuenta(sh, nom_cta, mon_cta, saldo_ini)
+                            st.rerun()
+                        else: st.error("El nombre es obligatorio.")
 
         # ==========================================
         # 6. ALERTAS AUTOMÁTICAS
@@ -2094,16 +2206,13 @@ def main():
                         hist_medico = hist_animal[hist_animal['Tipo Evento'].isin(['TRATAMIENTO', 'VACUNACION', 'MASTITIS', 'MUERTE'])]
                         
                         if st.button("📄 Generar PDF Clínico", type="primary", use_container_width=True):
-                            # Lógica para construir el PDF
                             pdf = FPDF()
                             pdf.add_page()
                             
-                            # Título principal
                             pdf.set_font("Arial", 'B', 16)
-                            pdf.cell(200, 10, txt="HISTORIAL CLÍNICO VETERINARIO", ln=True, align='C')
+                            pdf.cell(200, 10, txt="HISTORIAL CLINICO VETERINARIO", ln=True, align='C')
                             pdf.ln(5)
                             
-                            # Datos Generales
                             pdf.set_font("Arial", 'B', 12)
                             pdf.cell(200, 8, txt=f"FECHA DE REPORTE: {date.today()}", ln=True)
                             pdf.set_font("Arial", '', 12)
@@ -2112,13 +2221,12 @@ def main():
                             pdf.cell(200, 8, txt=f"ESTADO ACTUAL: {info_animal['Estado']}", ln=True)
                             pdf.ln(5)
                             
-                            # Registros Médicos
                             pdf.set_font("Arial", 'B', 14)
-                            pdf.cell(200, 10, txt="REGISTROS MÉDICOS:", ln=True)
+                            pdf.cell(200, 10, txt="REGISTROS MEDICOS:", ln=True)
                             
                             if hist_medico.empty:
                                 pdf.set_font("Arial", '', 12)
-                                pdf.cell(200, 8, txt="No se encontraron registros médicos para este animal.", ln=True)
+                                pdf.cell(200, 8, txt="No se encontraron registros medicos para este animal.", ln=True)
                             else:
                                 for _, ev in hist_medico.iterrows():
                                     pdf.set_font("Arial", 'B', 12)
@@ -2129,7 +2237,6 @@ def main():
                                         pdf.multi_cell(0, 8, txt=f"Notas: {ev['Notas']}")
                                     pdf.ln(2)
                             
-                            # Output PDF to bytes (Codificamos a latin-1 para compatibilidad FPDF)
                             pdf_bytes = pdf.output(dest='S').encode('latin-1')
                             
                             st.success("✅ PDF Generado con éxito.")
