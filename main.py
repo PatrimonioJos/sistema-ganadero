@@ -33,6 +33,14 @@ def safe_float(valor, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def fmt_fecha(fecha_str):
+    """Convierte YYYY-MM-DD (almacenado en Sheets) a DD/MM/YYYY (para mostrar al usuario)."""
+    try:
+        from datetime import datetime
+        return datetime.strptime(str(fecha_str).strip(), "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return str(fecha_str)  # devuelve el original si ya tiene otro formato
+
 def _safe_re(texto, patron, grupo=1, default=""):
     """Extrae el primer grupo capturado por el patrón regex. Retorna default si no hay match."""
     try:
@@ -393,14 +401,28 @@ def cambiar_estado_animal(sheet, id_animal, nuevo_estado):
         sheet.update_cell(fila, 9, nuevo_estado)
         cargar_datos.clear()  # cambio visible de inmediato en inventario
 
-def eliminar_animal_db(sheet, id_animal):
+def eliminar_animal_db(sh, id_animal):
+    """Elimina el animal y en cascada todo su historial de eventos."""
+    sheet = sh.get_worksheet(0)
     fila = encontrar_fila_por_id(sheet, id_animal)
     if fila:
         sheet.delete_rows(fila)
-        cargar_datos.clear() 
-        st.warning("🗑️ Animal eliminado")
-        time.sleep(1)
-        st.rerun()
+    # Eliminación en cascada del historial
+    try:
+        hoja_hist = sh.worksheet("Historial")
+        registros = hoja_hist.get_all_values()
+        filas_a_borrar = [
+            i + 1 for i, fila_h in enumerate(registros)
+            if len(fila_h) > 2 and str(fila_h[2]).strip() == str(id_animal)
+        ]
+        for f in sorted(filas_a_borrar, reverse=True):  # reverso para no desplazar índices
+            hoja_hist.delete_rows(f)
+    except Exception:
+        pass  # si no existe la hoja historial, no es error
+    cargar_datos.clear()
+    st.warning(f"🗑️ Animal {id_animal} eliminado junto con su historial ({len(filas_a_borrar) if 'filas_a_borrar' in dir() else 0} eventos).")
+    time.sleep(1)
+    st.rerun()
 
 def cambiar_estado_vendido(sheet, id_animal):
     fila = encontrar_fila_por_id(sheet, id_animal)
@@ -408,7 +430,21 @@ def cambiar_estado_vendido(sheet, id_animal):
         sheet.update_cell(fila, 9, "VENDIDO")
         # No limpiar caché por animal individual — se limpia una vez al terminar el lote.
 
-# --- FUNCIONES FINANZAS ---
+def eliminar_registro_historial(sh, id_evento):
+    """Elimina un evento del historial por su ID único (columna 7)."""
+    try:
+        hoja = sh.worksheet("Historial")
+        registros = hoja.get_all_values()
+        for i, fila in enumerate(registros):
+            if len(fila) >= 7 and str(fila[6]).strip() == str(id_evento).strip():
+                hoja.delete_rows(i + 1)
+                cargar_datos.clear()
+                return True
+    except Exception as e:
+        st.error(f"Error al eliminar: {e}")
+    return False
+
+
 def crear_cuenta(sh, nombre, moneda, saldo_inicial):
     hoja = sh.worksheet("Cuentas")
     nuevo_id = str(uuid.uuid4())[:12]  # UUID: sin colisiones si dos usuarios crean cuentas a la vez 
@@ -903,6 +939,9 @@ def toggle_registro_mode(): st.session_state.registro_expandido = not st.session
 
 # --- APP PRINCIPAL ---
 def main():
+    from streamlit_cookies_controller import CookieController
+    _cookies = CookieController()
+
     sh = conectar_sheets()
     if not sh:
         st.error("❌ No se pudo conectar con Google Sheets. Verifica las credenciales.")
@@ -911,9 +950,35 @@ def main():
     # Inicializar hojas auxiliares la primera vez
     inicializar_sistema(sh)
 
-    # ── PANTALLA DE LOGIN ──────────────────────────────────────────────────────
+    # ─ RESTAURAR SESIÓN DESDE COOKIE (8 h — persiste al cambiar de app en móvil) ─
+    if not st.session_state.get("autenticado", False):
+        try:
+            import json as _json, time as _time
+            _saved = _cookies.get("sg_session")
+            if _saved:
+                _data = _json.loads(_saved)
+                if _time.time() - _data.get("ts", 0) < 8 * 3600:
+                    st.session_state["autenticado"]    = True
+                    st.session_state["nombre_usuario"] = _data.get("nombre", "")
+                    st.session_state["rol_usuario"]    = _data.get("rol", "Operario")
+                    st.rerun()
+        except Exception:
+            pass  # cookie corrupta → va al login normal
+
+    # ─ PANTALLA DE LOGIN ─
     if not st.session_state.get("autenticado", False):
         pantalla_login(sh)
+        # Escribir cookie si el login fue exitoso en esta misma ejecución
+        if st.session_state.get("autenticado", False):
+            try:
+                import json as _json, time as _time
+                _cookies.set("sg_session", _json.dumps({
+                    "nombre": st.session_state.get("nombre_usuario", ""),
+                    "rol":    st.session_state.get("rol_usuario", "Operario"),
+                    "ts":     _time.time()
+                }), max_age=8*3600)
+            except Exception:
+                pass
         return
 
     # ── USUARIO AUTENTICADO: mostrar sidebar y app ────────────────────────────
@@ -1026,11 +1091,13 @@ def main():
         st.markdown("---")
 
         if not df_activos.empty:
-            machos = len(df_activos[df_activos["Sexo"] == "Macho"])
-            hembras = len(df_activos[df_activos["Sexo"] == "Hembra"])
-            crias = len(df_activos[df_activos["Tipo"] == "Becerro"])
-            adultos = len(df_activos) - crias
-            try: peso_total = df_activos["Peso"].apply(safe_float).sum()
+            # KPIs: excluir MUERTO y VENDIDO — solo animales verdaderamente vivos
+            df_vivos = df_activos[~df_activos["Estado"].isin(["MUERTO", "VENDIDO"])]
+            machos  = len(df_vivos[df_vivos["Sexo"] == "Macho"])
+            hembras = len(df_vivos[df_vivos["Sexo"] == "Hembra"])
+            crias   = len(df_vivos[df_vivos["Tipo"] == "Becerro"])
+            adultos = len(df_vivos) - crias
+            try: peso_total = df_vivos["Peso"].apply(safe_float).sum()
             except: peso_total = 0.0
 
             ganancias_diarias = []
@@ -1110,7 +1177,7 @@ def main():
 
                 c8, c9, c10 = st.columns(3)
                 with c8: peso_new = st.number_input("Peso (kg)*", min_value=0.0)
-                with c9: nac_new = st.date_input("Nacimiento")
+                with c9: nac_new = st.date_input("Nacimiento", format="DD/MM/YYYY")
                 with c10: foto_new = st.file_uploader("Foto")
 
                 if st.form_submit_button("💾 GUARDAR RÁPIDO", type="primary"):
@@ -1123,7 +1190,17 @@ def main():
                             with st.spinner("Subiendo foto..."):
                                 link = subir_foto_imgbb(foto_new)
                         
-                        datos = [id_new, tipo_new, nom_new, arete_new, raza_new, sexo_new, str(peso_new), str(nac_new), estado_new, link]
+                        datos = [
+                            id_new, tipo_new, nom_new, arete_new, raza_new, sexo_new,
+                            str(peso_new), str(nac_new), estado_new, link,
+                            "",  # 11 Propósito
+                            "True",  # 12 En Finca
+                            "", "",  # 13 Padre, 14 Madre
+                            "0", "0", "0",  # 15-17 Pesos especiales
+                            "",  # 18 Notas
+                            "", "", "", "",  # 19-22 Propietario, Lote, Chip, Num Raza
+                            "",  # 23 Especie
+                        ]
                         guardar_animal(hoja_animales, datos)
 
             st.write("")
@@ -1166,7 +1243,7 @@ def main():
 
                 st.markdown('<div class="seccion-titulo">Información Básica</div>', unsafe_allow_html=True)
                 nombre_full = st.text_input("Nombre del animal")
-                nac_full = st.date_input("Fecha de nacimiento *", date.today())
+                nac_full = st.date_input("Fecha de nacimiento *", date.today(), format="DD/MM/YYYY")
                 
                 col_bas1, col_bas2 = st.columns(2)
                 with col_bas1: prop_full = st.selectbox("Propietario", ["Principal", "Socio", "Externo"])
@@ -1278,6 +1355,14 @@ def main():
                 for index, row in df_pag.iterrows():
                     if not str(row.get('ID', '')).strip():
                         continue
+                    # Badges de estado especial
+                    _est = str(row.get('Estado', ''))
+                    _en_finca = str(row.get('En Finca', 'True')).strip()
+                    _badge = ''
+                    if _est == 'MUERTO':
+                        _badge = ' <span style="background:#c62828;color:#fff;border-radius:4px;padding:1px 6px;font-size:11px;margin-left:4px;">💀 Fallecido</span>'
+                    elif _en_finca.lower() in ('false', '0', 'no'):
+                        _badge = ' <span style="background:#e65100;color:#fff;border-radius:4px;padding:1px 6px;font-size:11px;margin-left:4px;">🚫 Fuera</span>'
                     with st.container(border=True):
                         c_img, c_info, c_btn = st.columns([1, 3, 1])
                         with c_img:
@@ -1412,14 +1497,19 @@ def main():
                                 det2 = str(row["Detalle 2"])
                                 if "Conc:" in det2: concentrado_txt = det2.split("Conc:")[1].strip()
                             except: pass
-                            
-                            st.markdown(f"""
-                            <div style="background-color: white; padding: 10px; border-bottom: 1px solid #eee; border-left: 1px solid #eee; border-right: 1px solid #eee; display: flex; justify-content: space-between; font-size: 14px;">
-                                <div style="width:33%">{row['Fecha']}</div>
-                                <div style="width:33%">{concentrado_txt}</div>
-                                <div style="width:33%">{row['Detalle 1']} L</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                            _id_ev_l = str(row.get('ID Evento', '')).strip()
+                            with st.container(border=True):
+                                _cl_txt, _cl_del = st.columns([5, 1])
+                                with _cl_txt:
+                                    st.markdown(f"🥛 **{row.get('Detalle 1','--')} L** &nbsp; `{fmt_fecha(row['Fecha'])}`", unsafe_allow_html=True)
+                                    st.caption(f"🌾 Concentrado: {concentrado_txt} &nbsp;|&nbsp; {row.get('Detalle 2','')}")
+                                with _cl_del:
+                                    st.write("")
+                                    if _id_ev_l and st.button("🗑️", key=f"del_leche_{_id_ev_l}_{idx}", help="Eliminar registro"):
+                                        if eliminar_registro_historial(sh, _id_ev_l):
+                                            st.success("Registro eliminado")
+                                            time.sleep(1)
+                                            st.rerun()
                     else: st.info("Sin registros de leche.")
 
                     st.write("")
@@ -1466,13 +1556,19 @@ def main():
                         hist_peso_rev = hist_peso.iloc[::-1]
 
                         for i, row in hist_peso_rev.iterrows():
-                            st.markdown(f"""
-                            <div style="background-color: white; padding: 10px; border-bottom: 1px solid #eee; border-left: 1px solid #eee; border-right: 1px solid #eee; display: flex; justify-content: space-between; font-size: 14px;">
-                                <div style="width:33%">{row['Fecha']}</div>
-                                <div style="width:33%">{row['Detalle 1']} kg</div>
-                                <div style="width:33%">{row['Ganancia']}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
+                            _id_ev_w = str(row.get('ID Evento', '')).strip()
+                            with st.container(border=True):
+                                _cw_txt, _cw_del = st.columns([5, 1])
+                                with _cw_txt:
+                                    st.markdown(f"⚖️ **{row.get('Detalle 1','--')} kg** &nbsp; `{fmt_fecha(row['Fecha'])}`", unsafe_allow_html=True)
+                                    st.caption(f"🌾 {row.get('Detalle 2','')} &nbsp;|&nbsp; 📊 Ganancia: {row.get('Ganancia','--')}")
+                                with _cw_del:
+                                    st.write("")
+                                    if _id_ev_w and st.button("🗑️", key=f"del_peso_{_id_ev_w}_{i}", help="Eliminar registro"):
+                                        if eliminar_registro_historial(sh, _id_ev_w):
+                                            st.success("Registro eliminado")
+                                            time.sleep(1)
+                                            st.rerun()
                     else: st.info("Sin registros de peso.")
 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -1489,7 +1585,7 @@ def main():
             elif st.session_state.sub_accion_produccion == 'add_peso':
                 st.subheader("Registrar Peso")
                 with st.form("form_peso_app"):
-                    fp_fecha = st.date_input("Fecha *", date.today())
+                    fp_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     fp_peso = st.number_input("Peso (kg) *", min_value=0.0)
                     fp_alim = st.selectbox("Tipo de alimentación *", OPCIONES_ALIMENTACION)
                     fp_notas = st.text_area("Notas y observaciones")
@@ -1517,7 +1613,7 @@ def main():
                 st.subheader("Registrar Leche")
                 with st.form("form_leche_app"):
                     c_fl1, c_fl2 = st.columns(2)
-                    with c_fl1: fl_fecha = st.date_input("Fecha *", date.today())
+                    with c_fl1: fl_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     with c_fl2: fl_periodo = st.selectbox("Periodo del día", ["Mañana", "Tarde", "Todo el día"])
                     
                     st.markdown("**Datos de producción**")
@@ -1588,30 +1684,28 @@ def main():
                     hist_vet = df_vaca_hist[df_vaca_hist["Tipo Evento"].isin(["TRATAMIENTO", "VACUNACION", "MASTITIS", "MUERTE"])]
                 
                 if hist_vet.empty:
-                    st.markdown("""
-                    <div class="empty-state">
-                        <div style="font-size: 30px; color: #aaa; margin-bottom: 10px;">ℹ️</div>
-                        <p>No hay historial clínico registrado</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.info("No hay historial clínico registrado.")
                 else:
                     for idx, row in hist_vet.iloc[::-1].iterrows():
-                        emoji_tipo = "🩺"
-                        titulo_evento = row['Tipo Evento']
-                        
-                        if row['Tipo Evento'] == "VACUNACION": emoji_tipo = "💉"; titulo_evento = "Vacunación"
+                        emoji_tipo = "🩺"; titulo_evento = row['Tipo Evento']
+                        if row['Tipo Evento'] == "VACUNACION":  emoji_tipo = "💉"; titulo_evento = "Vacunación"
                         elif row['Tipo Evento'] == "TRATAMIENTO": emoji_tipo = "💊"; titulo_evento = "Tratamiento"
-                        elif row['Tipo Evento'] == "MASTITIS": emoji_tipo = "🔴"; titulo_evento = "Mastitis"
-                        elif row['Tipo Evento'] == "MUERTE": emoji_tipo = "💀"; titulo_evento = "Muerte"
-                        
-                        st.markdown(f"""
-                        <div class="vet-card">
-                            <strong>{emoji_tipo} {titulo_evento} - {row['Fecha']}</strong><br>
-                            <span style="color:#555;">{row['Detalle 1']}</span><br>
-                            <span style="color:#777; font-size: 0.9em;">{row['Detalle 2']}</span>
-                            <div style="font-size: 0.8em; color: #999; margin-top: 5px;">{row['Notas']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        elif row['Tipo Evento'] == "MASTITIS":   emoji_tipo = "🔴"; titulo_evento = "Mastitis"
+                        elif row['Tipo Evento'] == "MUERTE":    emoji_tipo = "💀"; titulo_evento = "Muerte"
+                        _id_ev = str(row.get('ID Evento', '')).strip()
+                        with st.container(border=True):
+                            _col_txt, _col_del = st.columns([5, 1])
+                            with _col_txt:
+                                st.markdown(f"**{emoji_tipo} {titulo_evento}** &nbsp; `{fmt_fecha(row['Fecha'])}`", unsafe_allow_html=True)
+                                st.caption(f"{row.get('Detalle 1','')} | {row.get('Detalle 2','')}")
+                                if str(row.get('Notas','')): st.caption(f"📝 {row.get('Notas','')}")
+                            with _col_del:
+                                st.write("")
+                                if _id_ev and st.button("🗑️", key=f"del_vet_{_id_ev}_{idx}", help="Eliminar evento"):
+                                    if eliminar_registro_historial(sh, _id_ev):
+                                        st.success("Evento eliminado")
+                                        time.sleep(1)
+                                        st.rerun()
                 
                 if st.button("➕ Registro Rápido", type="primary"):
                     st.toast("Usa los botones de arriba para agregar registros.")
@@ -1621,7 +1715,7 @@ def main():
                 with st.form("form_tratamiento_vet"):
                     ft_nombre = st.text_input("Nombre del tratamiento")
                     c_vt1, c_vt2 = st.columns(2)
-                    with c_vt1: ft_fecha = st.date_input("Fecha *", date.today())
+                    with c_vt1: ft_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     with c_vt2: ft_dias = st.number_input("Días de tratamiento", min_value=1, step=1)
                     c_vt3, c_vt4 = st.columns(2)
                     with c_vt3: ft_tipo = st.selectbox("Tipo de Trat... *", TIPOS_TRATAMIENTO)
@@ -1648,7 +1742,7 @@ def main():
             elif st.session_state.sub_accion_veterinaria == 'vacuna':
                 st.subheader("Agregar Vacuna")
                 with st.form("form_vacuna_vet"):
-                    fv_fecha = st.date_input("Fecha *", date.today())
+                    fv_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     fv_vacuna = st.selectbox("Vacuna *", LISTA_VACUNAS)
                     fv_notas = st.text_area("Notas y observaciones")
                     
@@ -1665,7 +1759,7 @@ def main():
             elif st.session_state.sub_accion_veterinaria == 'mastitis':
                 st.subheader("Registrar Mastitis")
                 with st.form("form_mastitis_vet"):
-                    fm_fecha = st.date_input("Fecha *", date.today())
+                    fm_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     st.write("Ubres infectadas")
                     c_m_left, c_m_center, c_m_right = st.columns([2, 2, 2])
                     with c_m_left:
@@ -1705,7 +1799,7 @@ def main():
             elif st.session_state.sub_accion_veterinaria == 'muerte':
                 st.subheader("Registrar Muerte")
                 with st.form("form_muerte_vet"):
-                    fmu_fecha = st.date_input("Fecha *", date.today())
+                    fmu_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     fmu_causa = st.selectbox("Causa de muerte *", CAUSAS_MUERTE)
                     fmu_notas = st.text_area("Notas y observaciones")
                     col_cancel_mu, col_save_mu = st.columns(2)
@@ -1751,24 +1845,30 @@ def main():
             st.markdown(f"""
             <div class="repro-stats">
                 <h3>Estado reproductivo</h3>
-                <div class="stat-row"><span>Último parto</span><strong>{ultimo_parto_str}</strong></div>
+                <div class="stat-row"><span>Último parto</span><strong>{fmt_fecha(ultimo_parto_str)}</strong></div>
                 <div class="stat-row"><span>Estado</span><strong>{datos['Estado']}</strong></div>
                 <div class="stat-row" style="border:none;"><span>Días abiertos</span><strong>{dias_abiertos} día(s)</strong></div>
             </div>
             """, unsafe_allow_html=True)
 
             if st.session_state.sub_accion_reproduccion is None:
-                col_r1, col_r2 = st.columns(2)
-                with col_r1:
-                    if st.button("🐮 Fecundación", use_container_width=True): st.session_state.sub_accion_reproduccion = 'fecundacion'; st.rerun()
-                    st.write("")
-                    if st.button("🏥 Parto", use_container_width=True): st.session_state.sub_accion_reproduccion = 'parto'; st.rerun()
-                    st.write("")
-                    st.button("🕒 Crear Evento", use_container_width=True, disabled=True, help="Próximamente: añade notas libres al historial reproductivo")
-                with col_r2:
-                    if st.button("🔍 Chequeo", use_container_width=True): st.session_state.sub_accion_reproduccion = 'chequeo'; st.rerun()
-                    st.write("")
-                    if st.button("⚠️ Aborto", use_container_width=True):  st.session_state.sub_accion_reproduccion = 'aborto'; st.rerun()
+                _es_macho = str(datos.get('Sexo', '')).strip() == 'Macho'
+                if _es_macho:
+                    st.info("ℹ️ Los eventos reproductivos (Parto, Fecundación, Aborto, Chequeo) solo aplican a hembras. Este animal es Macho.")
+                    if st.button("🐂 Registrar Descendencia (como Padre)", use_container_width=True):
+                        st.session_state.sub_accion_reproduccion = 'fecundacion'; st.rerun()
+                else:
+                    col_r1, col_r2 = st.columns(2)
+                    with col_r1:
+                        if st.button("🐮 Fecundación", use_container_width=True): st.session_state.sub_accion_reproduccion = 'fecundacion'; st.rerun()
+                        st.write("")
+                        if st.button("🏥 Parto", use_container_width=True): st.session_state.sub_accion_reproduccion = 'parto'; st.rerun()
+                        st.write("")
+                        st.button("🕒 Crear Evento", use_container_width=True, disabled=True, help="Próximamente")
+                    with col_r2:
+                        if st.button("🔍 Chequeo", use_container_width=True): st.session_state.sub_accion_reproduccion = 'chequeo'; st.rerun()
+                        st.write("")
+                        if st.button("⚠️ Aborto", use_container_width=True): st.session_state.sub_accion_reproduccion = 'aborto'; st.rerun()
 
                 st.write("")
                 st.markdown("**Partos/Abortos**")
@@ -1805,29 +1905,36 @@ def main():
                 if not df_vaca_hist.empty:
                     hist_repro = df_vaca_hist[df_vaca_hist["Tipo Evento"].isin(["FECUNDACION", "PARTO", "ABORTO", "CHEQUEO_REPRO"])]
                 if hist_repro.empty:
-                    st.markdown("""<div class="empty-state"><p>No hay historial reproductivo</p></div>""", unsafe_allow_html=True)
+                    st.info("No hay historial reproductivo.")
                 else:
                     for idx, row in hist_repro.iloc[::-1].iterrows():
                         emoji_tipo = "🧬"; titulo_evento = row['Tipo Evento']
-                        if row['Tipo Evento'] == "FECUNDACION": emoji_tipo = "❤️"; titulo_evento = "Fecundación"
+                        if row['Tipo Evento'] == "FECUNDACION":    emoji_tipo = "❤️"; titulo_evento = "Fecundación"
                         elif row['Tipo Evento'] == "CHEQUEO_REPRO": emoji_tipo = "🔍"; titulo_evento = "Chequeo"
-                        elif row['Tipo Evento'] == "PARTO": emoji_tipo = "🎉"; titulo_evento = "Parto"
-                        elif row['Tipo Evento'] == "ABORTO": emoji_tipo = "⚠️"; titulo_evento = "Aborto"
-                        
-                        st.markdown(f"""
-                        <div class="repro-card">
-                            <strong>{emoji_tipo} {titulo_evento} - {row['Fecha']}</strong><br>
-                            <span style="color:#555;">{row['Detalle 1']}</span><br>
-                            <span style="color:#777; font-size: 0.9em;">{row['Detalle 2']}</span>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        elif row['Tipo Evento'] == "PARTO":         emoji_tipo = "🎉"; titulo_evento = "Parto"
+                        elif row['Tipo Evento'] == "ABORTO":        emoji_tipo = "⚠️"; titulo_evento = "Aborto"
+                        elif row['Tipo Evento'] == "DESCENDENCIA":  emoji_tipo = "🐂"; titulo_evento = "Descendencia"
+                        _id_ev_r = str(row.get('ID Evento', '')).strip()
+                        with st.container(border=True):
+                            _cr_txt, _cr_del = st.columns([5, 1])
+                            with _cr_txt:
+                                st.markdown(f"**{emoji_tipo} {titulo_evento}** &nbsp; `{fmt_fecha(row['Fecha'])}`", unsafe_allow_html=True)
+                                st.caption(f"{row.get('Detalle 1','')} | {row.get('Detalle 2','')}")
+                                if str(row.get('Notas','')): st.caption(f"📝 {row.get('Notas','')}")
+                            with _cr_del:
+                                st.write("")
+                                if _id_ev_r and st.button("🗑️", key=f"del_repro_{_id_ev_r}_{idx}", help="Eliminar evento"):
+                                    if eliminar_registro_historial(sh, _id_ev_r):
+                                        st.success("Evento eliminado")
+                                        time.sleep(1)
+                                        st.rerun()
                 
                 if st.button("➕ Registro Rápido", type="primary", key="btn_add_repro"): st.toast("Usa los botones de arriba para agregar registros.")
 
             elif st.session_state.sub_accion_reproduccion == 'fecundacion':
                 st.subheader("Nueva Fecundación")
                 c_f1, c_f2 = st.columns(2)
-                with c_f1: ff_fecha = st.date_input("Fecha *", date.today())
+                with c_f1: ff_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                 with c_f2: tipo_seleccionado = st.selectbox("Tipo de Fecundación *", TIPOS_FECUNDACION, index=0)
                 with st.form("form_fecundacion_dinamico"):
                     ff_padre_select = ""; ff_padre_manual = ""; ff_pajilla = ""; ff_madre_select = ""
@@ -1882,7 +1989,7 @@ def main():
             elif st.session_state.sub_accion_reproduccion == 'chequeo':
                 st.subheader("Nuevo Chequeo")
                 with st.form("form_chequeo_repro"):
-                    fc_fecha = st.date_input("Fecha *", date.today())
+                    fc_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     fc_res = st.selectbox("Resultado", ["No preñada", "Preñada"])
                     fc_notas = st.text_area("Notas y observaciones")
                     col_cancel_c, col_save_c = st.columns(2)
@@ -1907,12 +2014,20 @@ def main():
                     fp_nombre = st.text_input("Nombre del animal")
                     c_p1, c_p2 = st.columns(2)
                     with c_p1: fp_id = st.text_input("Número del animal (ID)*")
-                    with c_p2: fp_nac = st.date_input("Fecha de nacimiento", date.today())
+                    with c_p2: fp_nac = st.date_input("Fecha de nacimiento", date.today(), format="DD/MM/YYYY")
                     c_p3, c_p4 = st.columns(2)
                     with c_p3: fp_raza = st.selectbox("Raza *", ["Brahman", "Gyr", "Holstein", "Mestizo", "Senepol", "Otro"])
-                    with c_p4: 
+                    with c_p4:
                         st.write("¿Esta en la finca?")
                         fp_finca = st.checkbox("Sí", value=True)
+                    # Padre de la cría (toros del inventario)
+                    _lista_toros_parto = ["Desconocido / Externo"]
+                    if not df_activos.empty:
+                        _df_toros_p = df_activos[(df_activos['Sexo'] == 'Macho') | (df_activos['Tipo'] == 'Toro')]
+                        if not _df_toros_p.empty:
+                            _lista_toros_parto += [f"{r['Nombre']} (ID: {r['ID']})" for _, r in _df_toros_p.iterrows()]
+                    fp_padre_sel = st.selectbox("🐂 Padre (Toro del inventario)", _lista_toros_parto)
+                    fp_padre_id  = _safe_re(fp_padre_sel, r'\(ID:\s*(.+?)\)') if fp_padre_sel != "Desconocido / Externo" else ""
                     col_cancel_p, col_save_p = st.columns(2)
                     with col_cancel_p:
                         if st.form_submit_button("Cancelar"): st.session_state.sub_accion_reproduccion = None; st.rerun()
@@ -1922,9 +2037,9 @@ def main():
                                 if fp_id in lista_ids_todos:
                                     st.error("¡Ese ID ya existe!")
                                 else:
-                                    # 23 columnas completas — madre asignada automáticamente desde el perfil de la vaca
                                     _nombre_madre = str(datos.get("Nombre", "") or animal_id)
                                     _especie_madre = str(datos.get("Especie", datos.get("Tipo", "Bovino")))
+                                    _nombre_padre = fp_padre_sel if fp_padre_sel == "Desconocido / Externo" else fp_padre_sel.split(" (ID:")[0]
                                     datos_cria = [
                                         fp_id,                          # 1  ID
                                         "Becerro",                      # 2  Tipo/Categoría
@@ -1938,7 +2053,7 @@ def main():
                                         "Sin Foto",                     # 10 Foto
                                         "Cría",                         # 11 Propósito
                                         str(fp_finca),                  # 12 En Finca
-                                        "",                             # 13 Padre
+                                        _nombre_padre,                  # 13 PADRE ← nuevo
                                         _nombre_madre,                  # 14 MADRE ← asignada automáticamente
                                         "0",                            # 15 Peso Nacimiento
                                         "0",                            # 16 Peso Destete
@@ -1954,6 +2069,12 @@ def main():
                                     detalle_parto = f"Cría: {fp_nombre} ({fp_sexo})"
                                     datos_evento_parto = [str(fp_nac), "PARTO", animal_id, detalle_parto, f"ID Cría: {fp_id}", "Parto normal"]
                                     guardar_evento(sh, datos_evento_parto, "Parto")
+                                    # Historial cruzado: registrar DESCENDENCIA en el perfil del toro padre
+                                    if fp_padre_id:
+                                        datos_desc = [str(fp_nac), "DESCENDENCIA", fp_padre_id,
+                                                      f"Cría: {fp_nombre} ({fp_sexo})",
+                                                      f"Madre: {_nombre_madre} | ID Cría: {fp_id}", ""]
+                                        guardar_evento(sh, datos_desc, "Descendencia")
                                     cambiar_estado_animal(hoja_animales, animal_id, "Lactancia")
                                     st.success("¡Nacimiento registrado con éxito!")
                                     time.sleep(2)
@@ -1972,7 +2093,7 @@ def main():
                 """, unsafe_allow_html=True)
                 with st.form("form_aborto"):
                     fa_sexo = st.radio("Sexo del feto (si se identifica)", ["Macho", "Hembra"], horizontal=True)
-                    fa_fecha = st.date_input("Fecha del suceso *", date.today())
+                    fa_fecha = st.date_input("Fecha del suceso *", date.today(), format="DD/MM/YYYY")
                     fa_notas = st.text_area("Notas y observaciones")
                     col_cancel_a, col_save_a = st.columns(2)
                     with col_cancel_a:
@@ -2100,7 +2221,7 @@ def main():
             st.markdown("<h3>⬅ Compra de ganado</h3>", unsafe_allow_html=True)
             with st.form("form_compra_ganado"):
                 c_c1, c_c2 = st.columns(2)
-                with c_c1: f_fecha_compra = st.date_input("Fecha *", date.today())
+                with c_c1: f_fecha_compra = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                 with c_c2: f_moneda_compra = st.selectbox("Moneda", ["VES", "USD", "COP"])
 
                 st.markdown('<div class="app-header">Ubicación</div>', unsafe_allow_html=True)
@@ -2162,8 +2283,8 @@ def main():
             st.subheader("🚛 Nueva Venta de Ganado")
             with st.form("form_venta_completa"):
                 c_f1, c_f2 = st.columns(2)
-                with c_f1: fecha_venta = st.date_input("Fecha Venta", date.today())
-                with c_f2: fecha_envio = st.date_input("Fecha Envío", date.today())
+                with c_f1: fecha_venta = st.date_input("Fecha Venta", date.today(), format="DD/MM/YYYY")
+                with c_f2: fecha_envio = st.date_input("Fecha Envío", date.today(), format="DD/MM/YYYY")
                 
                 st.markdown('<div class="seccion-titulo">👤 Comprador</div>', unsafe_allow_html=True)
                 c_c1, c_c2 = st.columns(2)
@@ -2259,7 +2380,7 @@ def main():
         elif st.session_state.accion_activa == "leche":
             st.subheader("🥛 Registro Diario de Leche")
             with st.form("form_leche"):
-                f_fecha = st.date_input("Fecha", date.today())
+                f_fecha = st.date_input("Fecha", date.today(), format="DD/MM/YYYY")
                 c_l1, c_l2 = st.columns(2)
                 with c_l1: f_litros = st.number_input("Total Litros (L)", min_value=0.0)
                 with c_l2: f_vacas = st.number_input("Vacas Ordeñadas", min_value=1, step=1)
@@ -2273,7 +2394,7 @@ def main():
             with st.form("form_peso"):
                 p_animal = st.selectbox("Animal", lista_ids_activos)
                 c_p1, c_p2 = st.columns(2)
-                with c_p1: p_fecha = st.date_input("Fecha", date.today())
+                with c_p1: p_fecha = st.date_input("Fecha", date.today(), format="DD/MM/YYYY")
                 with c_p2: p_kilos = st.number_input("Peso (kg)", min_value=0.0)
                 if st.form_submit_button("Registrar"):
                     datos_peso = [str(p_fecha), "PESAJE", p_animal, str(p_kilos), "", "Control"]
@@ -2325,7 +2446,7 @@ def main():
                 with st.form("form_tratamiento_masivo_full"):
                     ftm_nombre = st.text_input("Nombre del tratamiento")
                     c_f1, c_f2 = st.columns(2)
-                    with c_f1: ftm_fecha = st.date_input("Fecha *", date.today())
+                    with c_f1: ftm_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     with c_f2: ftm_dias = st.number_input("Días de tratamiento...", min_value=1, step=1)
                     
                     c_t1, c_t2 = st.columns(2)
@@ -2388,7 +2509,7 @@ def main():
                 """, unsafe_allow_html=True)
 
                 with st.form("form_vacunacion_masiva_full"):
-                    fvm_fecha = st.date_input("Fecha *", date.today())
+                    fvm_fecha = st.date_input("Fecha *", date.today(), format="DD/MM/YYYY")
                     fvm_vacuna = st.selectbox("Vacuna *", LISTA_VACUNAS)
                     fvm_notas = st.text_area("Notas y observaciones")
                     
@@ -2528,20 +2649,7 @@ def main():
                                 st.error("Hubo un problema. Verifica tu conexión a Google Sheets.")
                     st.markdown("---")
 
-            st.markdown("#### 🗑️ Anular transacción")
-            st.write("Copia el 'ID Evento' que aparece en las tarjetas de abajo y pégalo aquí para eliminar el movimiento y revertir el saldo de tu cuenta bancaria.")
-            c_del1, c_del2 = st.columns([3, 1])
-            with c_del1:
-                id_a_eliminar = st.text_input("Ingrese el ID del Evento a eliminar:", placeholder="Ej: a1b2c3d4")
-            with c_del2:
-                st.write("") 
-                if st.button("Anular Transacción", type="primary", use_container_width=True):
-                    if id_a_eliminar:
-                        if eliminar_evento_finanzas_por_id(sh, id_a_eliminar):
-                            st.rerun()
-                    else:
-                        st.warning("Ingrese un ID válido primero.")
-            st.markdown("---")
+            # ─ Ya no se usa texto manual: el botón 🗑️ en cada tarjeta ejecuta la eliminación directamente ─
 
             # Calendario y Filtros de Fecha
             c_filtro1, c_filtro2 = st.columns([1, 2])
@@ -2625,17 +2733,19 @@ def main():
                             titulo = "Transferencia entre cuentas"
                             sub = f"ID Evento: **{id_evento}** | {row['Detalle 1']} ➔ {row['Detalle 2']}"
 
-                        st.markdown(f"""
-                        <div class="fin-row {css_class}">
-                            <div class="fin-icon">{icon}</div>
-                            <div class="fin-details">
-                                <div class="fin-title">{titulo}</div>
-                                <div class="fin-subtitle">{sub}</div>
-                                <div class="fin-notas">{notas}</div>
-                            </div>
-                            <div class="fin-date">{fecha}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        with st.container(border=True):
+                            _cf_txt, _cf_del = st.columns([5, 1])
+                            with _cf_txt:
+                                st.markdown(f"**{icon} {titulo}** &nbsp; `{fmt_fecha(fecha)}`", unsafe_allow_html=True)
+                                st.markdown(sub)
+                                if notas and notas.strip(): st.caption(f"📝 {notas}")
+                            with _cf_del:
+                                st.write("")
+                                if id_evento != "N/A" and st.button("🗑️", key=f"del_fin_{id_evento}", help="Anular transacción y revertir saldo"):
+                                    if eliminar_evento_finanzas_por_id(sh, id_evento):
+                                        st.success("Transacción anulada y saldo revertido")
+                                        time.sleep(1)
+                                        st.rerun()
                 else:
                     st.info(f"No hay movimientos financieros para el filtro de fecha actual.")
             else:
