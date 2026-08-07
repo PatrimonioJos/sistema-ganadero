@@ -1009,6 +1009,8 @@ def main():
 
     if not df.empty:
         df_activos = df[df["Estado"] != "VENDIDO"]
+        # Limpiar filas fantasma (Google Sheets a veces devuelve filas vacías con formato)
+        df_activos = df_activos[df_activos["ID"].astype(str).str.strip() != ""]
         lista_ids_activos = df_activos["ID"].tolist()
         lista_ids_todos   = df["ID"].tolist()
     else:
@@ -1318,6 +1320,26 @@ def main():
                             proposito_full, str(en_finca_full), padre_full, madre_full, str(peso_nac), str(peso_dest), str(peso_12m), notas_full, prop_full, lote_full, num_chip_full, num_raza_full, especie_full
                         ]
                         guardar_animal(hoja_animales, datos_extendidos)
+                        # ─ Sincronización histórica cruzada ────────────────────────────
+                        # Si la madre viene del inventario, registrar PARTO en su historial
+                        _id_madre_reg = _safe_re(madre_full, r'\(ID:\s*(.+?)\)')
+                        if _id_madre_reg:
+                            guardar_evento(sh, [
+                                str(nac_full), "PARTO", _id_madre_reg,
+                                f"Cría: {nombre_full} ({sexo_full})",
+                                f"ID Cría: {id_full}",
+                                "Registrado manualmente desde módulo Registro"
+                            ], "Parto")
+                            cambiar_estado_animal(hoja_animales, _id_madre_reg, "Lactancia")
+                        # Si el padre viene del inventario, registrar DESCENDENCIA en su historial
+                        _id_padre_reg = _safe_re(padre_full, r'\(ID:\s*(.+?)\)')
+                        if _id_padre_reg:
+                            guardar_evento(sh, [
+                                str(nac_full), "DESCENDENCIA", _id_padre_reg,
+                                f"Cría: {nombre_full} ({sexo_full})",
+                                f"Madre: {madre_full} | ID Cría: {id_full}",
+                                "Registrado manualmente"
+                            ], "Descendencia")
 
     if 'sub_accion_sanidad_rapida' not in st.session_state:
         st.session_state.sub_accion_sanidad_rapida = None
@@ -1384,7 +1406,7 @@ def main():
                             if "http" in foto_url: st.image(foto_url, use_container_width=True)
                             else: st.image("https://cdn-icons-png.flaticon.com/512/2173/2173516.png", width=50)
                         with c_info:
-                            st.subheader(f"{row['Nombre']}")
+                            st.markdown(f"<h3 style='margin-bottom:0;'>{row['Nombre']}{_badge}</h3>", unsafe_allow_html=True)
                             edad = calcular_edad(row['Nacimiento'])
                             st.caption(f"ID: {row['ID']} | {row['Raza']} | {edad}")
                         with c_btn:
