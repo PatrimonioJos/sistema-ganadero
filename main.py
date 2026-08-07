@@ -590,12 +590,22 @@ def inicializar_hoja_config(sh):
             ws.append_row(row)
 
 def inicializar_sistema(sh):
-    """Garantiza que todas las hojas auxiliares existen."""
-    inicializar_hoja_usuarios(sh)
-    inicializar_hoja_config(sh)
+    """Garantiza que todas las hojas auxiliares existen. Reintenta si hay error 429."""
+    import time as _t
+    for _intento in range(2):
+        try:
+            inicializar_hoja_usuarios(sh)
+            inicializar_hoja_config(sh)
+            return  # éxito
+        except Exception as _e:
+            if "429" in str(_e) and _intento == 0:
+                _t.sleep(5)   # esperar 5 s y reintentar una sola vez
+            else:
+                # Si ya existen las hojas el error es inofensivo; continuar
+                break
     # Hoja Cuentas ya se crea en conectar_sheets()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)  # 10 min — igual que la caché principal, evita lecturas extra
 def cargar_usuarios(_sh_key):
     """Carga la hoja Usuarios desde Sheets. _sh_key es solo para invalidar caché."""
     try:
@@ -610,7 +620,7 @@ def cargar_usuarios(_sh_key):
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)  # 10 min — igual que la caché principal
 def cargar_config(_sh_key):
     """Carga la configuración de la finca como dict."""
     try:
@@ -948,7 +958,11 @@ def main():
         return
 
     # Inicializar hojas auxiliares la primera vez
-    inicializar_sistema(sh)
+    # Inicializar hojas auxiliares solo UNA VEZ por sesión
+    # (evita consumir cuota de lectura en cada st.rerun)
+    if not st.session_state.get("sistema_inicializado"):
+        inicializar_sistema(sh)
+        st.session_state["sistema_inicializado"] = True
 
     # ─ RESTAURAR SESIÓN DESDE COOKIE (8 h — persiste al cambiar de app en móvil) ─
     if not st.session_state.get("autenticado", False):
